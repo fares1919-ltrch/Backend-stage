@@ -61,52 +61,40 @@ stages:
               pathToPublish: "$(Build.ArtifactStagingDirectory)"
               artifactName: "drop"
 
-  - stage: Deploy_Development
+  - stage: DeployToDev
     displayName: "Deploy to Development"
     dependsOn: Build
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
     jobs:
       - deployment: Deploy
-        environment: "development"
+        environment: development
         strategy:
           runOnce:
             deploy:
               steps:
-                - task: DownloadBuildArtifacts@1
-                  inputs:
-                    buildType: "current"
-                    downloadType: "single"
-                    artifactName: "drop"
-                    downloadPath: "$(System.ArtifactsDirectory)"
-
+                - download: current
+                  artifact: drop
                 - task: AzureWebApp@1
                   inputs:
                     azureSubscription: "tunisia-interns-azure-connection"
                     appName: "$(WebAppName)-dev"
-                    package: "$(System.ArtifactsDirectory)/**/*.zip"
-                    runtimeStack: "DOTNETCORE|8.0"
+                    package: "$(Pipeline.Workspace)/drop/**/*.zip"
 
-  - stage: Deploy_Production
+  - stage: DeployToProd
     displayName: "Deploy to Production"
     dependsOn: Build
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
     jobs:
       - deployment: Deploy
-        environment: "production"
+        environment: production
         strategy:
           runOnce:
             deploy:
               steps:
-                - task: DownloadBuildArtifacts@1
-                  inputs:
-                    buildType: "current"
-                    downloadType: "single"
-                    artifactName: "drop"
-                    downloadPath: "$(System.ArtifactsDirectory)"
-
+                - download: current
+                  artifact: drop
                 - task: AzureWebApp@1
                   inputs:
                     azureSubscription: "tunisia-interns-azure-connection"
                     appName: "$(WebAppName)-prod"
-                    package: "$(System.ArtifactsDirectory)/**/*.zip"
-                    runtimeStack: "DOTNETCORE|8.0"
+                    package: "$(Pipeline.Workspace)/drop/**/*.zip"
