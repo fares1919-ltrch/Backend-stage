@@ -3,14 +3,17 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace Process.DTOs
+namespace Backend.DTOs
 {
     public class ProcessDTO
     {
-        public required string ProcessId { get; set; }
-        public required string ProcessDate { get; set; }
-        public required string ProcessName { get; set; }
-        public int ProcessFiles { get; set; }
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string Status { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public string Username { get; set; }
+        public int TotalFiles { get; set; }
+        public int ProcessedFiles { get; set; }
     }
 }
 

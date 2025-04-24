@@ -4,36 +4,107 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.OpenApi.Models;
 using Backend.Services;
-using User.DTOs;
+using Backend.DTOs;
+using Backend.Models;
+using Backend.Data;
+using Backend.Interfaces;
 using System.Collections.Generic;
 using Backend.Configurations;
-
 using Microsoft.Extensions.Configuration;
-using Dedup.Interfaces;
 using Microsoft.Extensions.FileProviders;
+using System;
+using System.Threading.Tasks;
+using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.CookiePolicy;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
+using System.IO;
+using System.Linq;
+using System.Security.Authentication;
+
 using User.Interfaces;
 using Upload.Services;
 using User.Services;
-using Raven.Data;
+using Backend.Data;
 using Email.Services;
-using Dedup.Services;
+using Backend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+
+// Single Swagger configuration
+builder.Services.AddSwaggerGen(c =>
+{
+    // Basic Swagger document configuration
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Deduplication API",
+        Version = "v1",
+        Description = "API for facial recognition and deduplication system"
+    });
+
+    // Add operation filter for file uploads
+    // c.OperationFilter<Backend.Filters.FileUploadOperationFilter>();
+
+    // Add security definition
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer"
+    });
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+// IMPORTANT: DO NOT call SwaggerConfig.ConfigureSwagger to avoid duplicate configuration
+
 builder.Services.AddScoped<UserService>();
 builder.Services.AddScoped<IUserInterface, UserService>();
-builder.Services.AddScoped<RavenDbContext>();
-// builder.Services.AddScoped<IPhotoService, PhotoService>();
-builder.Services.AddScoped<IDeduplicationService, DeduplicationService>();
 builder.Services.AddScoped<UploadService>();
+builder.Services.AddScoped<ProfileImageService>();
+builder.Services.AddScoped<ConflictService>();
+builder.Services.AddScoped<ExceptionService>();
+builder.Services.AddScoped<IDeduplicationService, DeduplicationService>();
+builder.Services.AddScoped<IT4FaceService, T4FaceService>();
+builder.Services.AddScoped<DuplicateRecordService>();
 
+// Register RavenDbContext as a singleton since it manages the DocumentStore
+builder.Services.AddSingleton<RavenDbContext>();
 
+// Register the TempFileCleanupJob as a hosted service
+builder.Services.AddHostedService<TempFileCleanupJob>();
 
-
-// Configure Swagger
-SwaggerConfig.ConfigureSwagger(builder.Services);
+// Configure Swagger - KEEP ONLY ONE CALL
+// SwaggerConfig.ConfigureSwagger(builder.Services);
 
 // Configure Kestrel
 builder.WebHost.ConfigureKestrel(serverOptions =>
@@ -59,9 +130,11 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:4200")
+        policy.WithOrigins("http://localhost:4200", "https://localhost:4200")
               .AllowAnyHeader()
               .AllowAnyMethod()
+              .WithExposedHeaders("Content-Disposition")
+              .SetIsOriginAllowed(origin => true) // Allow any origin
               .AllowCredentials(); // Allow credentials
     });
 });
@@ -117,6 +190,19 @@ builder.Services.AddAuthentication(options =>
         ValidateAudience = false, // Set to true in production
         ClockSkew = TimeSpan.Zero
     };
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            // Check for token in cookie
+            var token = context.Request.Cookies["AuthToken"];
+            if (token != null)
+            {
+                context.Token = token;
+            }
+            return Task.CompletedTask;
+        }
+    };
 })
 .AddGoogle(googleOptions =>
 {
@@ -128,6 +214,7 @@ builder.Services.AddAuthentication(options =>
 // Add services like RavenDbContext, EmailService
 builder.Services.AddSingleton<RavenDbContext>();
 builder.Services.AddSingleton<EmailService>();
+builder.Services.AddScoped<DuplicateRecordService>();
 
 // Add session services
 builder.Services.AddDistributedMemoryCache();
@@ -139,41 +226,114 @@ builder.Services.AddSession(options =>
 });
 builder.Services.AddSingleton<JwtTokenService>();
 
+// Ensure configuration is accessible
+builder.Services.AddSingleton(builder.Configuration);
+
 var app = builder.Build();
 
-// Enable Swagger
-app.UseSwagger();
-app.UseSwaggerUI(c =>
+// Configure the HTTP request pipeline
+// Always enable Swagger in all environments
+app.UseSwagger(c =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Facial Recognition API V1");
-    c.RoutePrefix = "swagger";
-    c.DocumentTitle = "Facial Recognition API Documentation";
-    c.DefaultModelsExpandDepth(2);
-    c.DefaultModelRendering(Swashbuckle.AspNetCore.SwaggerUI.ModelRendering.Model);
-    c.DisplayRequestDuration();
-    c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
-    c.EnableDeepLinking();
-    c.EnableFilter();
-    c.ShowExtensions();
-    c.ShowCommonExtensions();
-    c.EnableValidator();
-    c.SupportedSubmitMethods(new[] { 
-        Swashbuckle.AspNetCore.SwaggerUI.SubmitMethod.Get,
-        Swashbuckle.AspNetCore.SwaggerUI.SubmitMethod.Post,
-        Swashbuckle.AspNetCore.SwaggerUI.SubmitMethod.Put,
-        Swashbuckle.AspNetCore.SwaggerUI.SubmitMethod.Delete
-    });
+    c.RouteTemplate = "swagger/{documentName}/swagger.json";
+
+    // Important: Serialize as Swagger 2.0 to fix rendering issue
+    c.SerializeAsV2 = true;
 });
 
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Deduplication API V1");
+    c.RoutePrefix = "swagger";
+});
+
+// Use CORS before authentication middleware
 app.UseCors("AllowFrontend");
-app.UseHttpsRedirection();
+// Comment out HTTPS redirection to allow HTTP endpoint to work properly
+// app.UseHttpsRedirection();
 app.UseRouting();
+
+// Add static files middleware for serving profile images BEFORE auth middleware
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(
+        Path.Combine(Directory.GetCurrentDirectory(), "ProfileImages")),
+    RequestPath = "/api/profile/images",
+    ServeUnknownFileTypes = true,
+    DefaultContentType = "image/jpeg",
+    OnPrepareResponse = ctx =>
+    {
+        // Disable caching for images
+        ctx.Context.Response.Headers.Append("Cache-Control", "no-cache, no-store");
+        ctx.Context.Response.Headers.Append("Pragma", "no-cache");
+        ctx.Context.Response.Headers.Append("Expires", "-1");
+
+        // Allow any origin to access these files
+        ctx.Context.Response.Headers.Append("Access-Control-Allow-Origin", "*");
+    }
+});
+
+// Auth middleware comes after static files
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseSession();
 app.UseCookiePolicy();
 
 app.MapControllers();
+
+// Add global exception handler
+app.UseExceptionHandler(appError =>
+{
+    appError.Run(async context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json";
+
+        var contextFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+        if (contextFeature != null)
+        {
+            var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogError(contextFeature.Error, "Unhandled exception");
+
+            var exceptionService = context.RequestServices.GetService<ExceptionService>();
+            if (exceptionService != null)
+            {
+                // Try to extract process ID from the URL
+                string? processId = null;
+                var routeValues = context.GetRouteData()?.Values;
+                if (routeValues != null && routeValues.ContainsKey("processId"))
+                {
+                    processId = routeValues["processId"]?.ToString();
+                }
+
+                if (!string.IsNullOrEmpty(processId))
+                {
+                    // Create an exception record
+                    await exceptionService.CreateExceptionAsync(
+                        processId,
+                        "Unhandled Exception",
+                        new List<string> { contextFeature.Error.Message },
+                        0.0,
+                        new Dictionary<string, object>
+                        {
+                            ["errorType"] = contextFeature.Error.GetType().Name,
+                            ["stackTrace"] = contextFeature.Error.StackTrace ?? "No stack trace available",
+                            ["path"] = context.Request.Path,
+                            ["method"] = context.Request.Method,
+                            ["timestamp"] = DateTime.UtcNow
+                        });
+                }
+            }
+
+            await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                context.Response.StatusCode,
+                Message = "An unexpected error occurred. Please try again later.",
+                Error = contextFeature.Error.Message
+            }));
+        }
+    });
+});
 
 // Add middleware to log all requests
 app.Use(async (context, next) =>

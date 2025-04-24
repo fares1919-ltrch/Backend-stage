@@ -1,228 +1,253 @@
-# Profile Management Documentation
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Profile Endpoints](#profile-endpoints)
-3. [Data Models](#data-models)
-4. [Authorization](#authorization)
-5. [Example Usage](#example-usage)
+# User Profile Management Documentation
 
 ## Overview
 
-The Profile Management API provides endpoints for managing user profiles, including viewing and updating profile information. All endpoints require authentication, and some have role-based access control.
+The Profile Management system allows users to view and update their personal information, profile pictures, and account settings. It provides a comprehensive interface for managing user identity and preferences within the application.
 
-## Profile Endpoints
+## Features
 
-### 1. Get Self Profile
+- **Profile Information Management**: Update personal details including contact info and demographics
+- **Profile Picture Handling**: Upload, crop, and manage profile images with secure storage
+- **Account Settings**: Manage user preferences, notifications, and security settings
+- **Data Export**: Download personal data in compliance with GDPR and privacy regulations
+- **Activity History**: View login history and account activity for security monitoring
 
-```http
-GET /api/Profile/me
+## Implementation Architecture
+
+```mermaid
+graph TD
+    A[ProfileController] --> B[ProfileImageService]
+    A --> C[UserService]
+    B --> D[File System Storage]
+    C --> E[RavenDB]
+    A --> F[JwtTokenService]
+    F --> G[Authentication Validation]
 ```
 
-**Description**: Retrieves the profile information of the currently authenticated user.
+## API Endpoints
 
-**Authorization**:
+### Get User Profile
 
-- Authentication: Required (JWT Token)
-- Role: Any authenticated user
-
-**Response**:
-
-```json
-{
-  "userId": "string",
-  "userName": "string",
-  "email": "string",
-  "isValidated": boolean,
-  "role": "User | Admin | SuperAdmin",
-  "phoneNumber": "string | null",
-  "address": "string | null",
-  "city": "string | null",
-  "country": "string | null",
-  "dateOfBirth": "string | null",
-  "profilePicture": "string | null"
-}
-```
-
-**Error Responses**:
-
-- 401 Unauthorized: Missing or invalid authentication
-- 404 Not Found: User profile not found
-
-### 2. Update Profile
-
-```http
-PUT /api/Profile/update
-```
-
-**Description**: Updates the profile information of the currently authenticated user.
-
-**Authorization**:
-
-- Authentication: Required (JWT Token)
-- Role: Any authenticated user
-
-**Request Body**:
-
-```json
-{
-  "userName": "string | null",
-  "email": "string | null",
-  "phoneNumber": "string | null",
-  "address": "string | null",
-  "city": "string | null",
-  "country": "string | null",
-  "dateOfBirth": "string | null",
-  "profilePicture": "string | null"
-}
-```
-
-**Response**: Same as Get Self Profile
-
-**Error Responses**:
-
-- 401 Unauthorized: Missing or invalid authentication
-- 404 Not Found: User profile not found
-- 400 Bad Request: Invalid input data
-
-### 3. Get User Profile by ID
-
-```http
-GET /api/Profile/{userId}
-```
-
-**Description**: Retrieves the profile information of a specific user by their ID.
-
-**Authorization**:
-
-- Authentication: Required (JWT Token)
-- Role: Admin or SuperAdmin only
-
-**Parameters**:
-
-- `userId`: The unique identifier of the user
-
-**Response**: Same as Get Self Profile
-
-**Error Responses**:
-
-- 401 Unauthorized: Missing or invalid authentication
-- 403 Forbidden: Insufficient permissions
-- 404 Not Found: User profile not found
-
-## Data Models
-
-### 1. UserDTO (Response Model)
-
-```csharp
-public class UserDTO
-{
-    public required string UserId { get; set; }
-    public required string UserName { get; set; }
-    public required string Email { get; set; }
-    public bool IsValidated { get; set; }
-    public UserRole Role { get; set; }
-    public string? PhoneNumber { get; set; }
-    public string? Address { get; set; }
-    public string? City { get; set; }
-    public string? Country { get; set; }
-    public DateTime? DateOfBirth { get; set; }
-    public string? ProfilePicture { get; set; }
-}
-```
-
-### 2. UpdateProfileDTO (Request Model)
-
-```csharp
-public class UpdateProfileDTO
-{
-    public string? UserName { get; set; }
-    public string? Email { get; set; }
-    public string? PhoneNumber { get; set; }
-    public string? Address { get; set; }
-    public string? City { get; set; }
-    public string? Country { get; set; }
-    public DateTime? DateOfBirth { get; set; }
-    public string? ProfilePicture { get; set; }
-}
-```
-
-## Authorization
-
-### Authentication
-
-- All endpoints require a valid JWT token
-- Token must be sent in the Authorization header
-- Token must contain the user's ID and role
-
-### Role-Based Access
-
-1. **Get Self Profile**
-
-   - Available to all authenticated users
-   - Returns only the user's own profile
-
-2. **Update Profile**
-
-   - Available to all authenticated users
-   - Can only update own profile
-
-3. **Get User Profile by ID**
-   - Requires Admin or SuperAdmin role
-   - Can view any user's profile
-
-## Example Usage
-
-### Get Own Profile
-
-```bash
-curl -X GET 'https://localhost:7294/api/Profile/me' \
-  -H 'Authorization: Bearer your_jwt_token'
-```
-
-### Update Profile
-
-```bash
-curl -X PUT 'https://localhost:7294/api/Profile/update' \
-  -H 'Authorization: Bearer your_jwt_token' \
-  -H 'Content-Type: application/json' \
-  -d '{
+- **Endpoint:** `GET /api/profile`
+- **Description:** Retrieves the current user's profile information
+- **Authentication:** Required (JWT)
+- **Response:** Complete user profile data
+  ```json
+  {
+    "userId": "users/1-A",
+    "username": "john_doe",
+    "email": "john@example.com",
     "phoneNumber": "+1234567890",
     "address": "123 Main St",
     "city": "New York",
-    "country": "USA"
-  }'
-```
+    "country": "USA",
+    "dateOfBirth": "1990-01-01",
+    "createdAt": "2023-01-15T10:30:00Z",
+    "lastLoginAt": "2023-06-20T14:25:30Z",
+    "profilePictureUrl": "/api/profile/images/user-1-A-20230620.jpg"
+  }
+  ```
+- **Status Codes:**
+  - 200: Profile retrieved successfully
+  - 401: Unauthorized
+  - 404: Profile not found
 
-### Get User Profile (Admin)
+### Update Profile
 
-```bash
-curl -X GET 'https://localhost:7294/api/Profile/user123' \
-  -H 'Authorization: Bearer your_jwt_token'
-```
+- **Endpoint:** `PUT /api/profile`
+- **Description:** Updates the user's profile information
+- **Authentication:** Required (JWT)
+- **Request Body:**
+  ```json
+  {
+    "userName": "john_doe",
+    "email": "john@example.com",
+    "phoneNumber": "+1234567890",
+    "address": "123 Main St",
+    "city": "New York",
+    "country": "USA",
+    "dateOfBirth": "1990-01-01"
+  }
+  ```
+- **Response:** Updated user profile data
+  ```json
+  {
+    "userId": "users/1-A",
+    "username": "john_doe",
+    "email": "john@example.com",
+    "phoneNumber": "+1234567890",
+    "address": "123 Main St",
+    "city": "New York",
+    "country": "USA",
+    "dateOfBirth": "1990-01-01",
+    "profilePictureUrl": "/api/profile/images/user-1-A-20230620.jpg"
+  }
+  ```
+- **Status Codes:**
+  - 200: Profile updated successfully
+  - 400: Invalid request data
+  - 401: Unauthorized
+  - 409: Email or username already in use
 
-## Implementation Notes
+### Upload Profile Picture
 
-1. **Security**
+- **Endpoint:** `POST /api/profile/picture`
+- **Description:** Uploads or updates the user's profile picture
+- **Authentication:** Required (JWT)
+- **Request:** Multipart form data with image file
+- **Response:** URL to access the profile picture
+  ```json
+  {
+    "profilePictureUrl": "/api/profile/images/user-1-A-20230620.jpg"
+  }
+  ```
+- **Status Codes:**
+  - 200: Picture uploaded successfully
+  - 400: Invalid image format or size
+  - 401: Unauthorized
+  - 500: File processing error
 
-   - All endpoints are protected with [Authorize] attribute
-   - Role-based access control implemented
-   - JWT token validation required
+### Get Profile Picture
 
-2. **Data Validation**
+- **Endpoint:** `GET /api/profile/picture`
+- **Description:** Retrieves the user's profile picture
+- **Authentication:** Required (JWT)
+- **Response:** Image file with appropriate content type
+- **Status Codes:**
+  - 200: Picture retrieved successfully
+  - 404: No profile picture found
 
-   - Input validation for all fields
-   - Nullable fields for optional information
-   - Type checking for dates and numbers
+### Delete Profile Picture
 
-3. **Error Handling**
+- **Endpoint:** `DELETE /api/profile/picture`
+- **Description:** Removes the user's profile picture
+- **Authentication:** Required (JWT)
+- **Response:** Confirmation of deletion
+  ```json
+  {
+    "message": "Profile picture deleted successfully"
+  }
+  ```
+- **Status Codes:**
+  - 200: Picture deleted successfully
+  - 401: Unauthorized
+  - 404: No profile picture found
 
-   - Clear error messages
-   - Appropriate HTTP status codes
-   - Role-based access validation
+### Update Password
 
-4. **Performance**
-   - Efficient database queries
-   - Caching where appropriate
-   - Optimized response payload
+- **Endpoint:** `PUT /api/profile/password`
+- **Description:** Updates the user's password
+- **Authentication:** Required (JWT)
+- **Request Body:**
+  ```json
+  {
+    "currentPassword": "OldPassword123!",
+    "newPassword": "NewPassword123!",
+    "confirmPassword": "NewPassword123!"
+  }
+  ```
+- **Response:** Confirmation of password update
+  ```json
+  {
+    "message": "Password updated successfully"
+  }
+  ```
+- **Status Codes:**
+  - 200: Password updated successfully
+  - 400: Invalid password format or mismatch
+  - 401: Current password incorrect
+
+### Get Login History
+
+- **Endpoint:** `GET /api/profile/activity`
+- **Description:** Retrieves user's login history and account activity
+- **Authentication:** Required (JWT)
+- **Response:** List of login events
+  ```json
+  {
+    "activities": [
+      {
+        "timestamp": "2023-06-20T14:25:30Z",
+        "action": "LOGIN",
+        "ipAddress": "192.168.1.1",
+        "device": "Chrome on Windows",
+        "location": "New York, USA"
+      },
+      {
+        "timestamp": "2023-06-15T09:12:45Z",
+        "action": "PASSWORD_CHANGE",
+        "ipAddress": "192.168.1.1",
+        "device": "Chrome on Windows",
+        "location": "New York, USA"
+      }
+    ]
+  }
+  ```
+- **Status Codes:**
+  - 200: Activity history retrieved successfully
+  - 401: Unauthorized
+
+### Export User Data
+
+- **Endpoint:** `GET /api/profile/export`
+- **Description:** Exports all user data in a portable format (GDPR compliance)
+- **Authentication:** Required (JWT)
+- **Response:** JSON file with all user data
+- **Status Codes:**
+  - 200: Data exported successfully
+  - 401: Unauthorized
+
+## Implementation Details
+
+### Profile Data Management
+
+- User profiles are stored in RavenDB with document IDs in format `users/{id}`
+- Profile updates are validated against data constraints before storage
+- Email address changes require verification similar to registration
+- Profile history is maintained for audit and recovery purposes
+
+### Profile Picture Processing
+
+- Images are resized to standard dimensions (500x500 pixels)
+- Images undergo automatic cropping to maintain aspect ratio
+- Facial detection is used to center profile pictures on faces
+- Supported formats: JPEG, PNG, WebP
+- Maximum file size: 5MB
+- Minimum dimensions: 200x200 pixels
+- Images are stored in a dedicated `ProfileImages` directory with secure access controls
+- File naming convention: `user-{userId}-{timestamp}.jpg`
+- Old profile pictures are automatically deleted when replaced
+
+### Security Implementation
+
+- Personal data is encrypted at rest in the database
+- Profile pictures are served via HTTPS only
+- Access controls ensure users can only access their own profiles
+- Audit logging tracks all profile changes with timestamps and IP addresses
+- Profile API endpoints implement rate limiting to prevent abuse
+- Input validation protects against injection attacks and malformed data
+
+### Static File Service
+
+- Profile images are served from a dedicated endpoint with proper content types
+- Dynamic image resizing available through query parameters (width/height)
+- Cache control headers prevent browser caching of profile images when updated
+- Content-Disposition headers properly set for file downloads
+- Direct file access is restricted through authorization middleware
+- Images are served with appropriate CORS headers for frontend access
+
+### Performance Considerations
+
+- Profile data is cached to minimize database requests
+- Profile images use optimized compression to balance quality and performance
+- CDN-compatible URLs for profile images in production environments
+- Image processing operations run in background tasks for large uploads
+- Progressive image loading for slow connections
+
+### Privacy Compliance
+
+- User data export follows GDPR Article 20 requirements
+- Data retention policies applied to all profile information
+- Clear user interface for controlling data visibility and sharing
+- Consent tracking for data processing operations
+- Built-in mechanisms for data deletion requests

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 
 using User.Models;
 using User.DTOs;
+using User.Services;
 
 namespace User.Interfaces
 {
@@ -12,6 +13,8 @@ namespace User.Interfaces
     {
         Task<UserModel?> RegisterUser(RegisterUserDTO registerUserDto);  // Register user method
         string? GenerateJwtToken(string email);  // JWT Token generation method
-        string? Login(Logindata logindata);  // User login method
+        LoginResult? Login(Logindata logindata);  // User login method
+        Task<LoginResult> GoogleLoginAsync(string idToken);  // Google login method
+        bool DeleteProfilePicture(string userId);  // Delete profile picture method
     }
 }

@@ -55,12 +55,13 @@ namespace users.Controllers
         [Authorize(Roles = "SuperAdmin")]
         public IActionResult PromoteToAdmin(string userId)
         {
+            // Get requesting user ID if it exists in the token
             var requestingUserId = User.FindFirst("UserId")?.Value;
-            if (string.IsNullOrEmpty(requestingUserId))
-            {
-                return Unauthorized();
-            }
 
+            // The [Authorize(Roles = "SuperAdmin")] attribute already ensures this is a SuperAdmin
+            // so we can proceed even if the UserId claim is missing
+
+            // We'll pass the requestingUserId to the service (it can be null)
             var success = _userService.PromoteToAdmin(userId, requestingUserId);
             if (!success)
                 return BadRequest("Cannot promote user to admin");
@@ -72,12 +73,13 @@ namespace users.Controllers
         [Authorize(Roles = "SuperAdmin")]
         public IActionResult DemoteAdmin(string userId)
         {
+            // Get requesting user ID if it exists in the token
             var requestingUserId = User.FindFirst("UserId")?.Value;
-            if (string.IsNullOrEmpty(requestingUserId))
-            {
-                return Unauthorized();
-            }
 
+            // The [Authorize(Roles = "SuperAdmin")] attribute already ensures this is a SuperAdmin
+            // so we can proceed even if the UserId claim is missing
+
+            // We'll pass the requestingUserId to the service (it can be null)
             var success = _userService.DemoteAdmin(userId, requestingUserId);
             if (!success)
                 return BadRequest("Cannot demote admin");

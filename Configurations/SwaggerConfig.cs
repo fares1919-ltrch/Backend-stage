@@ -3,7 +3,7 @@ using User.DTOs;
 using System.Collections.Generic;
 using Microsoft.OpenApi.Any;
 using Swashbuckle.AspNetCore.SwaggerGen;
-using Dedup.Models;
+using Backend.Models;
 using Files.Models;
 using Microsoft.AspNetCore.Authorization;
 
@@ -44,7 +44,7 @@ namespace Backend.Configurations
             // Add tags for better organization
             c.TagActionsBy(api => new[] { api.GroupName ?? api.ActionDescriptor.RouteValues["controller"] });
             c.OrderActionsBy(api => api.RelativePath);
-            
+
             // Include XML comments if available
             var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
             var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
@@ -220,7 +220,7 @@ namespace Backend.Configurations
                 }
             });
 
-            c.MapType<DeduplcationFile>(() => new OpenApiSchema
+            c.MapType<DeduplicationFile>(() => new OpenApiSchema
             {
                 Type = "object",
                 Properties = new Dictionary<string, OpenApiSchema>
@@ -352,35 +352,35 @@ namespace Backend.Configurations
                 Required = new HashSet<string> { "Username", "Email", "Password", "Confirmpassword" },
                 Properties = new Dictionary<string, OpenApiSchema>
                 {
-                    ["Username"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Username"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's username (3-50 characters)",
                         MinLength = 3,
                         MaxLength = 50,
-                        Example = new OpenApiString("john_doe") 
+                        Example = new OpenApiString("john_doe")
                     },
-                    ["Email"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Email"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "email",
                         Description = "User's email address",
-                        Example = new OpenApiString("john@example.com") 
+                        Example = new OpenApiString("john@example.com")
                     },
-                    ["Password"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Password"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "password",
                         Description = "User's password (minimum 8 characters, must contain uppercase, lowercase, number and special character)",
                         MinLength = 8,
-                        Example = new OpenApiString("Password123!") 
+                        Example = new OpenApiString("Password123!")
                     },
-                    ["Confirmpassword"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Confirmpassword"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "password",
                         Description = "Password confirmation (must match Password)",
                         MinLength = 8,
-                        Example = new OpenApiString("Password123!") 
+                        Example = new OpenApiString("Password123!")
                     },
-                    ["Role"] = new OpenApiSchema { 
-                        Type = "integer", 
+                    ["Role"] = new OpenApiSchema {
+                        Type = "integer",
                         Description = "User role (0: User, 1: Admin, 2: SuperAdmin)",
                         Enum = new List<IOpenApiAny>
                         {
@@ -388,7 +388,7 @@ namespace Backend.Configurations
                             new OpenApiInteger(1),
                             new OpenApiInteger(2)
                         },
-                        Example = new OpenApiInteger(0) 
+                        Example = new OpenApiInteger(0)
                     }
                 }
             };
@@ -402,17 +402,17 @@ namespace Backend.Configurations
                 Required = new HashSet<string> { "Email", "Password" },
                 Properties = new Dictionary<string, OpenApiSchema>
                 {
-                    ["Email"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Email"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "email",
                         Description = "User's email address",
-                        Example = new OpenApiString("john@example.com") 
+                        Example = new OpenApiString("john@example.com")
                     },
-                    ["Password"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Password"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "password",
                         Description = "User's password",
-                        Example = new OpenApiString("Password123!") 
+                        Example = new OpenApiString("Password123!")
                     }
                 }
             };
@@ -426,10 +426,10 @@ namespace Backend.Configurations
                 Required = new HashSet<string> { "IdToken" },
                 Properties = new Dictionary<string, OpenApiSchema>
                 {
-                    ["IdToken"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["IdToken"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "Google ID token received from Google Sign-In",
-                        Example = new OpenApiString("eyJhbGciOiJSUzI1NiIsImtpZCI6IjEifQ...") 
+                        Example = new OpenApiString("eyJhbGciOiJSUzI1NiIsImtpZCI6IjEifQ...")
                     }
                 }
             };
@@ -443,11 +443,11 @@ namespace Backend.Configurations
                 Required = new HashSet<string> { "Email" },
                 Properties = new Dictionary<string, OpenApiSchema>
                 {
-                    ["Email"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Email"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "email",
                         Description = "User's email address for password reset",
-                        Example = new OpenApiString("john@example.com") 
+                        Example = new OpenApiString("john@example.com")
                     }
                 }
             };
@@ -461,17 +461,17 @@ namespace Backend.Configurations
                 Required = new HashSet<string> { "Token", "NewPass" },
                 Properties = new Dictionary<string, OpenApiSchema>
                 {
-                    ["Token"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Token"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "Password reset token received via email",
-                        Example = new OpenApiString("eyJhbGciOiJSUzI1NiIsImtpZCI6IjEifQ...") 
+                        Example = new OpenApiString("eyJhbGciOiJSUzI1NiIsImtpZCI6IjEifQ...")
                     },
-                    ["NewPass"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["NewPass"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "password",
                         Description = "New password (minimum 8 characters, must contain uppercase, lowercase, number and special character)",
                         MinLength = 8,
-                        Example = new OpenApiString("NewPassword123!") 
+                        Example = new OpenApiString("NewPassword123!")
                     }
                 }
             };
@@ -484,50 +484,50 @@ namespace Backend.Configurations
                 Type = "object",
                 Properties = new Dictionary<string, OpenApiSchema>
                 {
-                    ["UserName"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["UserName"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's username (3-50 characters)",
                         MinLength = 3,
                         MaxLength = 50,
-                        Example = new OpenApiString("john_doe") 
+                        Example = new OpenApiString("john_doe")
                     },
-                    ["Email"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Email"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "email",
                         Description = "User's email address",
-                        Example = new OpenApiString("john@example.com") 
+                        Example = new OpenApiString("john@example.com")
                     },
-                    ["PhoneNumber"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["PhoneNumber"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's phone number (international format)",
                         Pattern = "^\\+[1-9]\\d{1,14}$",
-                        Example = new OpenApiString("+1234567890") 
+                        Example = new OpenApiString("+1234567890")
                     },
-                    ["Address"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Address"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's address",
-                        Example = new OpenApiString("123 Main St") 
+                        Example = new OpenApiString("123 Main St")
                     },
-                    ["City"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["City"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's city",
-                        Example = new OpenApiString("New York") 
+                        Example = new OpenApiString("New York")
                     },
-                    ["Country"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Country"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's country",
-                        Example = new OpenApiString("USA") 
+                        Example = new OpenApiString("USA")
                     },
-                    ["DateOfBirth"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["DateOfBirth"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "date",
                         Description = "User's date of birth (YYYY-MM-DD)",
-                        Example = new OpenApiString("1990-01-01") 
+                        Example = new OpenApiString("1990-01-01")
                     },
-                    ["ProfilePicture"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["ProfilePicture"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "Base64 encoded profile picture (JPEG/PNG, max 5MB)",
-                        Example = new OpenApiString("data:image/jpeg;base64,/9j/4AAQSkZJRg...") 
+                        Example = new OpenApiString("data:image/jpeg;base64,/9j/4AAQSkZJRg...")
                     }
                 }
             };
@@ -541,29 +541,29 @@ namespace Backend.Configurations
                 Required = new HashSet<string> { "UserId", "UserName", "Email", "Role" },
                 Properties = new Dictionary<string, OpenApiSchema>
                 {
-                    ["UserId"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["UserId"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "Unique user identifier",
-                        Example = new OpenApiString("users/1-A") 
+                        Example = new OpenApiString("users/1-A")
                     },
-                    ["UserName"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["UserName"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's username",
-                        Example = new OpenApiString("john_doe") 
+                        Example = new OpenApiString("john_doe")
                     },
-                    ["Email"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Email"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "email",
                         Description = "User's email address",
-                        Example = new OpenApiString("john@example.com") 
+                        Example = new OpenApiString("john@example.com")
                     },
-                    ["IsValidated"] = new OpenApiSchema { 
-                        Type = "boolean", 
+                    ["IsValidated"] = new OpenApiSchema {
+                        Type = "boolean",
                         Description = "Whether the user's email is validated",
-                        Example = new OpenApiBoolean(true) 
+                        Example = new OpenApiBoolean(true)
                     },
-                    ["Role"] = new OpenApiSchema { 
-                        Type = "integer", 
+                    ["Role"] = new OpenApiSchema {
+                        Type = "integer",
                         Description = "User role (0: User, 1: Admin, 2: SuperAdmin)",
                         Enum = new List<IOpenApiAny>
                         {
@@ -571,38 +571,38 @@ namespace Backend.Configurations
                             new OpenApiInteger(1),
                             new OpenApiInteger(2)
                         },
-                        Example = new OpenApiInteger(0) 
+                        Example = new OpenApiInteger(0)
                     },
-                    ["PhoneNumber"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["PhoneNumber"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's phone number",
-                        Example = new OpenApiString("+1234567890") 
+                        Example = new OpenApiString("+1234567890")
                     },
-                    ["Address"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Address"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's address",
-                        Example = new OpenApiString("123 Main St") 
+                        Example = new OpenApiString("123 Main St")
                     },
-                    ["City"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["City"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's city",
-                        Example = new OpenApiString("New York") 
+                        Example = new OpenApiString("New York")
                     },
-                    ["Country"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["Country"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "User's country",
-                        Example = new OpenApiString("USA") 
+                        Example = new OpenApiString("USA")
                     },
-                    ["DateOfBirth"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["DateOfBirth"] = new OpenApiSchema {
+                        Type = "string",
                         Format = "date",
                         Description = "User's date of birth",
-                        Example = new OpenApiString("1990-01-01") 
+                        Example = new OpenApiString("1990-01-01")
                     },
-                    ["ProfilePicture"] = new OpenApiSchema { 
-                        Type = "string", 
+                    ["ProfilePicture"] = new OpenApiSchema {
+                        Type = "string",
                         Description = "Base64 encoded profile picture",
-                        Example = new OpenApiString("data:image/jpeg;base64,/9j/4AAQSkZJRg...") 
+                        Example = new OpenApiString("data:image/jpeg;base64,/9j/4AAQSkZJRg...")
                     }
                 }
             };
@@ -613,13 +613,23 @@ namespace Backend.Configurations
     {
         public void Apply(OpenApiOperation operation, OperationFilterContext context)
         {
-            if (operation.Responses == null)
-                operation.Responses = new OpenApiResponses();
+            // Define all your responses
+            var responses = new Dictionary<string, string>
+            {
+                { "401", "Unauthorized" },
+                { "403", "Forbidden" },
+                { "500", "Server Error" },
+                // Add other status codes you need
+            };
 
-            operation.Responses.Add("401", new OpenApiResponse { Description = "Unauthorized" });
-            operation.Responses.Add("403", new OpenApiResponse { Description = "Forbidden" });
-            operation.Responses.Add("404", new OpenApiResponse { Description = "Not Found" });
-            operation.Responses.Add("500", new OpenApiResponse { Description = "Internal Server Error" });
+            // Safely add them to the operation responses
+            foreach (var response in responses)
+            {
+                if (!operation.Responses.ContainsKey(response.Key))
+                {
+                    operation.Responses.Add(response.Key, new OpenApiResponse { Description = response.Value });
+                }
+            }
         }
     }
 
@@ -656,4 +666,4 @@ namespace Backend.Configurations
             }
         }
     }
-} 
+}

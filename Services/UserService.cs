@@ -12,7 +12,10 @@ using System.Text;
 using User.DTOs;
 using User.Interfaces;
 using User.Models;
-using Raven.Data;
+using Backend.Data;
+using Microsoft.AspNetCore.Http;
+using System.IO;
+using Upload.Services;
 
 namespace User.Services
 {
@@ -21,18 +24,20 @@ namespace User.Services
         private readonly RavenDbContext _dbContext;
         private readonly IConfiguration _config;
         private readonly JwtTokenService _jwtTokenService; // Ajout de JwtTokenService
+        private readonly UploadService _uploadService;
 
-        public UserService(IConfiguration config , RavenDbContext dbContext, JwtTokenService jwtTokenService)
+        public UserService(IConfiguration config, RavenDbContext dbContext, JwtTokenService jwtTokenService, UploadService uploadService)
         {
             _dbContext = dbContext;
             _config = config;
             _jwtTokenService = jwtTokenService; // Initialisation dans le constructeur
+            _uploadService = uploadService;
         }
 
         public Task<UserModel?> RegisterUser(RegisterUserDTO registerUserDto)
         {
             // Vérification si l'email existe déjà
-            using (var session = _dbContext.OpenSession(database:"users"))
+            using (var session = _dbContext.OpenSession(database: "users"))
             {
                 if (session.Query<UserModel>().Any(u => u.email == registerUserDto.Email))
                 {
@@ -62,15 +67,29 @@ namespace User.Services
             }
         }
 
-        public string? Login(Logindata logindata)
+        public LoginResult? Login(Logindata logindata)
         {
-            using (var session = _dbContext.OpenSession(database:"users"))
+            using (var session = _dbContext.OpenSession(database: "users"))
             {
-                var user = session.Query<UserModel>().FirstOrDefault(u => u.email == logindata.Email);
+                UserModel? user = null;
+
+                // Try to find user by email if provided
+                if (!string.IsNullOrEmpty(logindata.Email))
+                {
+                    user = session.Query<UserModel>().FirstOrDefault(u => u.email == logindata.Email);
+                    Console.WriteLine($"Searching by email: {logindata.Email}");
+                }
+
+                // If not found by email, try username if provided
+                if (user == null && !string.IsNullOrEmpty(logindata.Username))
+                {
+                    user = session.Query<UserModel>().FirstOrDefault(u => u.userName == logindata.Username);
+                    Console.WriteLine($"Searching by username: {logindata.Username}");
+                }
 
                 if (user == null)
                 {
-                    Console.WriteLine("Utilisateur non trouvé avec l'email : " + logindata.Email);
+                    Console.WriteLine("User not found with provided credentials");
                     return null;
                 }
 
@@ -78,36 +97,59 @@ namespace User.Services
 
                 if (!isValidPassword)
                 {
-                    Console.WriteLine("Mot de passe incorrect.");
+                    Console.WriteLine("Invalid password.");
                     return null;
                 }
 
-                // Générer le token avec le rôle
+                // Generate token with role
                 var claims = new[]
                 {
                     new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Email, user.email),
+                    new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, user.userName),
                     new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, user.Role.ToString()),
-                    new System.Security.Claims.Claim("UserId", user.id)
+                    new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, user.id)
                 };
 
-                return _jwtTokenService.GenerateJwtTokenWithClaims(user.email, claims);
+                var token = _jwtTokenService.GenerateJwtTokenWithClaims(user.email, claims);
+
+                // Create user DTO
+                var userDto = new UserDTO
+                {
+                    UserId = user.id,
+                    UserName = user.userName,
+                    Email = user.email,
+                    IsValidated = user.validated,
+                    Role = user.Role,
+                    PhoneNumber = user.PhoneNumber,
+                    Address = user.Address,
+                    City = user.City,
+                    Country = user.Country,
+                    DateOfBirth = user.DateOfBirth,
+                    ProfilePicture = user.ProfilePicture
+                };
+
+                return new LoginResult
+                {
+                    Token = token,
+                    User = userDto
+                };
             }
         }
 
-        public async Task<string> GoogleLoginAsync(string idToken)
+        public async Task<LoginResult> GoogleLoginAsync(string idToken)
         {
-            var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, 
+            var payload = await GoogleJsonWebSignature.ValidateAsync(idToken,
                 new GoogleJsonWebSignature.ValidationSettings
                 {
                     Audience = new[] { "110137029112-8o191dgnivc0f3al16oo2jr90ptf3er2.apps.googleusercontent.com" }
                 });
 
-            using var session = _dbContext.OpenSession(database:"users");
+            using var session = _dbContext.OpenSession(database: "users");
 
             var existingUser = session.Query<UserModel>().FirstOrDefault(u => u.email == payload.Email);
-            
+
             if (existingUser == null)
-            {           
+            {
                 var registerDto = new RegisterUserDTO
                 {
                     Email = payload.Email,
@@ -122,15 +164,48 @@ namespace User.Services
                 {
                     throw new Exception("L'utilisateur n'a pas pu être créé.");
                 }
+
+                // Get the newly created user
+                existingUser = session.Query<UserModel>().FirstOrDefault(u => u.email == payload.Email);
             }
 
-            // Générer le token JWT
-            return _jwtTokenService.GenerateJwtToken(payload.Email);
+            // Generate token with claims
+            var claims = new[]
+            {
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Email, existingUser.email),
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, existingUser.userName),
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, existingUser.Role.ToString()),
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, existingUser.id)
+            };
+
+            var token = _jwtTokenService.GenerateJwtTokenWithClaims(existingUser.email, claims);
+
+            // Create user DTO
+            var userDto = new UserDTO
+            {
+                UserId = existingUser.id,
+                UserName = existingUser.userName,
+                Email = existingUser.email,
+                IsValidated = existingUser.validated,
+                Role = existingUser.Role,
+                PhoneNumber = existingUser.PhoneNumber,
+                Address = existingUser.Address,
+                City = existingUser.City,
+                Country = existingUser.Country,
+                DateOfBirth = existingUser.DateOfBirth,
+                ProfilePicture = existingUser.ProfilePicture
+            };
+
+            return new LoginResult
+            {
+                Token = token,
+                User = userDto
+            };
         }
 
         public Task<string?> GenerateResetToken(string resetEmail)
         {
-            using (var session = _dbContext.OpenSession(database:"users"))
+            using (var session = _dbContext.OpenSession(database: "users"))
             {
                 var user = session.Query<UserModel>().FirstOrDefault(u => u.email == resetEmail);
                 if (user == null) return Task.FromResult<string?>(null);
@@ -158,7 +233,7 @@ namespace User.Services
 
         public Task<bool> ResetPasswordAsync(string Token, string NewPassword)
         {
-            using (var session = _dbContext.OpenSession(database:"users"))
+            using (var session = _dbContext.OpenSession(database: "users"))
             {
                 var user = session.Query<UserModel>().FirstOrDefault(u => u.ResetToken == Token && u.ResetTokenExpiry > DateTime.UtcNow);
                 if (user == null) return Task.FromResult(false);
@@ -174,7 +249,7 @@ namespace User.Services
 
         public string? GenerateJwtToken(string email)
         {
-            using (var session = _dbContext.OpenSession(database:"users"))
+            using (var session = _dbContext.OpenSession(database: "users"))
             {
                 var user = session.Query<UserModel>().FirstOrDefault(u => u.email == email);
                 if (user == null) return null;
@@ -213,19 +288,31 @@ namespace User.Services
         {
             using (var session = _dbContext.OpenSession(database: "users"))
             {
-                var requestingUser = session.Query<UserModel>().FirstOrDefault(u => u.id == requestingUserId);
+                // First check if the target user exists
                 var targetUser = session.Query<UserModel>().FirstOrDefault(u => u.id == userId);
-
-                if (requestingUser?.Role != UserRole.SuperAdmin || targetUser == null)
+                if (targetUser == null)
                 {
                     return false;
                 }
 
+                // If the target user is already an Admin, we can't promote them
                 if (targetUser.Role == UserRole.Admin)
                 {
                     return false; // Already an admin
                 }
 
+                // If requestingUserId is provided, verify that requestingUser is a SuperAdmin
+                // This is a belt-and-suspenders approach since the controller already has [Authorize(Roles = "SuperAdmin")]
+                if (!string.IsNullOrEmpty(requestingUserId))
+                {
+                    var requestingUser = session.Query<UserModel>().FirstOrDefault(u => u.id == requestingUserId);
+                    if (requestingUser?.Role != UserRole.SuperAdmin)
+                    {
+                        return false;
+                    }
+                }
+
+                // If we've made it here, we can perform the promotion
                 targetUser.Role = UserRole.Admin;
                 session.SaveChanges();
                 return true;
@@ -236,26 +323,38 @@ namespace User.Services
         {
             using (var session = _dbContext.OpenSession(database: "users"))
             {
-                var requestingUser = session.Query<UserModel>().FirstOrDefault(u => u.id == requestingUserId);
+                // First check if the target user exists
                 var targetUser = session.Query<UserModel>().FirstOrDefault(u => u.id == userId);
-
-                if (requestingUser?.Role != UserRole.SuperAdmin || targetUser == null)
+                if (targetUser == null)
                 {
                     return false;
                 }
 
+                // If the target user is not an Admin, we can't demote them
                 if (targetUser.Role != UserRole.Admin)
                 {
                     return false; // Not an admin
                 }
 
+                // If requestingUserId is provided, verify that requestingUser is a SuperAdmin
+                // This is a belt-and-suspenders approach since the controller already has [Authorize(Roles = "SuperAdmin")]
+                if (!string.IsNullOrEmpty(requestingUserId))
+                {
+                    var requestingUser = session.Query<UserModel>().FirstOrDefault(u => u.id == requestingUserId);
+                    if (requestingUser?.Role != UserRole.SuperAdmin)
+                    {
+                        return false;
+                    }
+                }
+
+                // If we've made it here, we can perform the demotion
                 targetUser.Role = UserRole.User;
                 session.SaveChanges();
                 return true;
             }
         }
 
-        public bool ConfirmUser(string userId)
+        public async Task<bool> ConfirmUserAsync(string userId)
         {
             using (var session = _dbContext.OpenSession(database: "users"))
             {
@@ -268,7 +367,13 @@ namespace User.Services
             }
         }
 
-        public bool DeleteUser(string userId)
+        // Add non-async alias for ConfirmUserAsync
+        public bool ConfirmUser(string userId)
+        {
+            return ConfirmUserAsync(userId).GetAwaiter().GetResult();
+        }
+
+        public async Task<bool> DeleteUserAsync(string userId)
         {
             using (var session = _dbContext.OpenSession(database: "users"))
             {
@@ -281,7 +386,13 @@ namespace User.Services
             }
         }
 
-        public UserDTO? UpdateUserProfile(string userId, UpdateProfileDTO updateProfile)
+        // Add non-async alias for DeleteUserAsync
+        public bool DeleteUser(string userId)
+        {
+            return DeleteUserAsync(userId).GetAwaiter().GetResult();
+        }
+
+        public async Task<UserDTO?> UpdateUserProfileAsync(string userId, UpdateProfileDTO updateProfile)
         {
             using (var session = _dbContext.OpenSession(database: "users"))
             {
@@ -290,9 +401,27 @@ namespace User.Services
 
                 if (!string.IsNullOrEmpty(updateProfile.UserName))
                     user.userName = updateProfile.UserName;
-                
+
                 if (!string.IsNullOrEmpty(updateProfile.Email))
                     user.email = updateProfile.Email;
+
+                if (!string.IsNullOrEmpty(updateProfile.PhoneNumber))
+                    user.PhoneNumber = updateProfile.PhoneNumber;
+
+                if (!string.IsNullOrEmpty(updateProfile.Address))
+                    user.Address = updateProfile.Address;
+
+                if (!string.IsNullOrEmpty(updateProfile.City))
+                    user.City = updateProfile.City;
+
+                if (!string.IsNullOrEmpty(updateProfile.Country))
+                    user.Country = updateProfile.Country;
+
+                if (updateProfile.DateOfBirth.HasValue)
+                    user.DateOfBirth = updateProfile.DateOfBirth;
+
+                if (!string.IsNullOrEmpty(updateProfile.ProfilePicture))
+                    user.ProfilePicture = updateProfile.ProfilePicture;
 
                 session.SaveChanges();
 
@@ -302,12 +431,24 @@ namespace User.Services
                     UserName = user.userName,
                     Email = user.email,
                     IsValidated = user.validated,
-                    Role = user.Role
+                    Role = user.Role,
+                    PhoneNumber = user.PhoneNumber,
+                    Address = user.Address,
+                    City = user.City,
+                    Country = user.Country,
+                    DateOfBirth = user.DateOfBirth,
+                    ProfilePicture = user.ProfilePicture
                 };
             }
         }
 
-        public UserDTO? GetUserProfile(string userId)
+        // Add non-async alias for UpdateUserProfileAsync
+        public UserDTO? UpdateUserProfile(string userId, UpdateProfileDTO updateProfile)
+        {
+            return UpdateUserProfileAsync(userId, updateProfile).GetAwaiter().GetResult();
+        }
+
+        public async Task<UserDTO?> GetUserProfileAsync(string userId)
         {
             using (var session = _dbContext.OpenSession(database: "users"))
             {
@@ -320,9 +461,62 @@ namespace User.Services
                     UserName = user.userName,
                     Email = user.email,
                     IsValidated = user.validated,
-                    Role = user.Role
+                    Role = user.Role,
+                    PhoneNumber = user.PhoneNumber,
+                    Address = user.Address,
+                    City = user.City,
+                    Country = user.Country,
+                    DateOfBirth = user.DateOfBirth,
+                    ProfilePicture = user.ProfilePicture
                 };
             }
+        }
+
+        // Add non-async alias for GetUserProfileAsync
+        public UserDTO? GetUserProfile(string userId)
+        {
+            return GetUserProfileAsync(userId).GetAwaiter().GetResult();
+        }
+
+        public async Task<string> UploadProfilePictureAsync(string userId, IFormFile file)
+        {
+            string base64Image = await _uploadService.ProcessImageAsync(file);
+
+            using (var session = _dbContext.OpenSession(database: "users"))
+            {
+                var user = session.Load<UserModel>(userId);
+                if (user == null)
+                {
+                    throw new Exception("User not found");
+                }
+
+                user.ProfilePicture = base64Image;
+                session.SaveChanges();
+
+                return base64Image;
+            }
+        }
+
+        public async Task<bool> DeleteProfilePictureAsync(string userId)
+        {
+            using (var session = _dbContext.OpenSession(database: "users"))
+            {
+                var user = session.Load<UserModel>(userId);
+                if (user == null)
+                {
+                    return false;
+                }
+
+                user.ProfilePicture = null;
+                session.SaveChanges();
+                return true;
+            }
+        }
+
+        public bool DeleteProfilePicture(string userId)
+        {
+            // Call the async method and wait for its completion
+            return DeleteProfilePictureAsync(userId).GetAwaiter().GetResult();
         }
 
         Task<UserModel> IUserInterface.RegisterUser(RegisterUserDTO registerUserDto)

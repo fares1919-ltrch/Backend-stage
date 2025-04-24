@@ -1,4 +1,4 @@
-using Raven.Data;
+using Backend.Data;
 using User.DTOs;
 using Backend.Services;
 using Google.Apis.Auth;
@@ -50,24 +50,37 @@ public class AuthController : ControllerBase
 
     [HttpPost("login")]
     public IActionResult Login([FromBody] Logindata request)
-    
     {
-        Console.WriteLine(" we have reached the backend ,email=",request.Email ,"password=",request.Password );
-        var token = _authService.Login(request);
-        if (token == null)
+        Console.WriteLine($"Login attempt - Email: {request.Email}, Username: {request.Username}");
+
+        if (string.IsNullOrEmpty(request.Email) && string.IsNullOrEmpty(request.Username))
+        {
+            return BadRequest(new { message = "Either email or username is required" });
+        }
+
+        var loginResult = _authService.Login(request);
+        if (loginResult == null)
         {
             return Unauthorized(new { message = "Invalid credentials" });
         }
+
+        // Set cookie
         var cookieOptions = new CookieOptions
-    {
-        HttpOnly = true, // Protège contre JavaScript
-        Secure = true, // HTTPS uniquement
-        SameSite = SameSiteMode.None, // Permet le partage entre onglets
-        Expires = DateTime.UtcNow.AddHours(2) // Expiration du cookie
-    };
-    Response.Cookies.Append("AuthToken", token, cookieOptions);
-        // Rediriger vers une interface sécurisée (dashboard)
-        return Ok(new { redirectUrl = "/dashboard" });
+        {
+            HttpOnly = true, // Protège contre JavaScript
+            Secure = true, // HTTPS uniquement
+            SameSite = SameSiteMode.None, // Permet le partage entre onglets
+            Expires = DateTime.UtcNow.AddHours(2) // Expiration du cookie
+        };
+
+        Response.Cookies.Append("AuthToken", loginResult.Token, cookieOptions);
+
+        // Return token and user info in response body
+        return Ok(new {
+            token = loginResult.Token,
+            user = loginResult.User,
+            redirectUrl = "/dashboard"
+        });
     }
 
 
@@ -76,7 +89,7 @@ public class AuthController : ControllerBase
     {
         try
         {
-            var token = await _authService.GoogleLoginAsync(request.IdToken);
+            var loginResult = await _authService.GoogleLoginAsync(request.IdToken);
 
             var cookieOptions = new CookieOptions
             {
@@ -86,8 +99,12 @@ public class AuthController : ControllerBase
                 Expires = DateTime.UtcNow.AddHours(2)
             };
 
-            Response.Cookies.Append("AuthToken", token, cookieOptions);
-            return Ok(new { redirectUrl = "/dashboard" });
+            Response.Cookies.Append("AuthToken", loginResult.Token, cookieOptions);
+            return Ok(new {
+                token = loginResult.Token,
+                user = loginResult.User,
+                redirectUrl = "/dashboard"
+            });
         }
         catch (Exception ex)
         {

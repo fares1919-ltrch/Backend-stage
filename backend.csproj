@@ -17,7 +17,16 @@
     <PackageReference Include="NHibernate.Linq" Version="1.0.0" />
     <PackageReference Include="RavenDB.Client" Version="7.0.1" />
     <PackageReference Include="RavenDB.Embedded" Version="7.0.1" />
+    <PackageReference Include="SharpCompress" Version="0.39.0" />
+    <PackageReference Include="SharpZipLib" Version="1.4.2" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <PackageReference Include="Swashbuckle.AspNetCore.Annotations" Version="8.1.1" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="admin.client.certificate.twyn.crt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

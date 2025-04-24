@@ -11,6 +11,7 @@
 7. [Development Stack](#development-stack)
 8. [Server Configuration](#server-configuration)
 9. [Getting Started](#getting-started)
+10. [Detailed Documentation](#detailed-documentation)
 
 ## Project Overview
 
@@ -239,19 +240,24 @@ sequenceDiagram
 2. Start the frontend application
 3. Access the application through the configured URLs
 
-## Documentation Structure
+## Detailed Documentation
 
-### Core Documentation
+### Core Feature Documentation
 
-- [Auth.md](Auth.md): Authentication and authorization
-- [UserManagement.md](UserManagement.md): User management features
-- [Uploading.md](Uploading.md): File upload and processing
-- [Deduplication.md](Deduplication.md): Deduplication process
-- [Profile.md](Profile.md): User profile management
+- [Authentication](Documentation/Auth.md): Comprehensive authentication and authorization system
+- [User Management](Documentation/UserManagement.md): User administration and role management
+- [File Upload](Documentation/Uploading.md): Secure file upload and processing system
+- [Deduplication](Documentation/Deduplication.md): Facial recognition and deduplication process
+- [Profile Management](Documentation/Profile.md): User profile and settings management
+- [System Flow](Documentation/Flow.md): Detailed system workflows and component interactions
+
+### Development and Deployment
+
+- [CI/CD Pipeline](Documentation/pipeline-flow.md): Continuous integration and deployment workflow
+- [API Documentation](https://localhost:7294/swagger): Interactive API documentation (Swagger)
 
 ### Additional Resources
 
-- API documentation
-- Security guidelines
-- Deployment procedures
-- Troubleshooting guide
+- [Security Guidelines](Documentation/Auth.md#security-implementation): Security implementation details
+- [Deployment Procedures](Documentation/pipeline-flow.md#deployment-stages): Deployment process documentation
+- [Troubleshooting Guide](Documentation/Flow.md#error-handling): Error handling and troubleshooting

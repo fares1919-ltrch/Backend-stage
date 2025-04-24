@@ -1,18 +1,18 @@
-namespace Dedup.Models
-{
-    public class DeduplcationFile
-    {
-        public DeduplcationFile()
-        {
-            Id = string.Empty;
-            ProcessId = string.Empty;
-            FilePath = string.Empty;
-            Status = "uploaded"; // Default status
-        }
+using System;
 
-        public required string Id { get; set; } // ID unique du fichier
-        public required string ProcessId { get; set; } // ID du processus associé
-        public required string FilePath { get; set; } // Chemin du fichier temporaire
-        public required string Status { get; set; } // Statut du fichier (ex: "uploaded", "processed")
+namespace Backend.Models
+{
+    public class DeduplicationFile
+    {
+        public string Id { get; set; }
+        public string FileName { get; set; }
+        public string FilePath { get; set; }
+        public string Base64String { get; set; }
+        public string Status { get; set; } = "Uploaded";
+        public DateTime CreatedAt { get; set; }
+        public string? FaceId { get; set; }
+        public DateTime? ProcessStartDate { get; set; }
+        public string ProcessStatus { get; set; } = "Pending";
+        public bool Photodeduplique { get; set; } = false;
     }
 }

@@ -8,14 +8,14 @@ namespace User.DTOs
     public required string Email { get; set; }
     public required string Password { get; set; }
     public required string Confirmpassword { get; set; }
-    public UserRole Role { get; set; } = UserRole.Admin;
+    public UserRole Role { get; set; } = UserRole.User;
 }
 
   public class Logindata
 {
-    public required string Email { get; set; }
+    public string? Email { get; set; }
+    public string? Username { get; set; }
     public required string Password { get; set; }
-
 }
 
  public class UserDTO
@@ -88,4 +88,10 @@ public class UploadResponse
     public string FileId { get; set; }
 }
 
-}   
+public class LoginResult
+{
+    public string Token { get; set; }
+    public UserDTO User { get; set; }
+}
+
+}

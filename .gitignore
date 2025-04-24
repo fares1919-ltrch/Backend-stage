@@ -1,2 +1,8 @@
 /obj
 /bin
+/admin.client.certificate.twyn.crt
+/azure-pipelines.yml
+/.gitignore
+/Tests
+/.vscode
+/TempFiles
