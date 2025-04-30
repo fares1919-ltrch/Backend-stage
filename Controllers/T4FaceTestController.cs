@@ -49,12 +49,37 @@ namespace Backend.Controllers
 
                 using (var httpClient = new HttpClient(handler))
                 {
-                    httpClient.Timeout = TimeSpan.FromSeconds(5);
+                    httpClient.Timeout = TimeSpan.FromSeconds(15);
 
                     // Test basic connectivity
                     _logger.LogInformation("Testing basic connectivity to {ApiUrl}", apiUrl);
-                    var baseResponse = await httpClient.GetAsync(apiUrl);
-                    _logger.LogInformation("Base connection response: {StatusCode}", baseResponse.StatusCode);
+
+                    HttpResponseMessage baseResponse;
+                    try
+                    {
+                        baseResponse = await httpClient.GetAsync(apiUrl);
+                        _logger.LogInformation("Base connection response: {StatusCode}", baseResponse.StatusCode);
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        _logger.LogWarning(ex, "HTTP request error connecting to {ApiUrl}: {Message}", apiUrl, ex.Message);
+
+                        // Create a fake response to continue with the test
+                        baseResponse = new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+                        {
+                            ReasonPhrase = ex.Message
+                        };
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        _logger.LogWarning("Connection to {ApiUrl} timed out", apiUrl);
+
+                        // Create a fake response for timeout
+                        baseResponse = new HttpResponseMessage(System.Net.HttpStatusCode.RequestTimeout)
+                        {
+                            ReasonPhrase = "Connection timed out"
+                        };
+                    }
 
                     // Try to get metrics from the API
                     string metricsData = "Not available";
@@ -78,6 +103,17 @@ namespace Backend.Controllers
                             metricsData = $"Failed to get metrics: {metricsResponse.StatusCode}";
                             _logger.LogWarning("Failed to get metrics: {StatusCode}", metricsResponse.StatusCode);
                         }
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        string statusCode = ex.StatusCode.HasValue ? ex.StatusCode.Value.ToString() : "Unknown";
+                        metricsData = $"HTTP error accessing metrics: {statusCode} - {ex.Message}";
+                        _logger.LogError(ex, "HTTP error accessing metrics endpoint: {StatusCode}", statusCode);
+                    }
+                    catch (TaskCanceledException ex)
+                    {
+                        metricsData = "Timeout accessing metrics endpoint";
+                        _logger.LogError(ex, "Timeout accessing metrics endpoint");
                     }
                     catch (Exception ex)
                     {

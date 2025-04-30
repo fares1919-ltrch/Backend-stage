@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using User.Services;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
+using User.Models;
 
 namespace users.Controllers
 {
@@ -53,7 +54,7 @@ namespace users.Controllers
 
         [HttpPut("promote/{userId}")]
         [Authorize(Roles = "SuperAdmin")]
-        public IActionResult PromoteToAdmin(string userId)
+        public async Task<IActionResult> PromoteToAdmin(string userId)
         {
             // Get requesting user ID if it exists in the token
             var requestingUserId = User.FindFirst("UserId")?.Value;
@@ -61,17 +62,37 @@ namespace users.Controllers
             // The [Authorize(Roles = "SuperAdmin")] attribute already ensures this is a SuperAdmin
             // so we can proceed even if the UserId claim is missing
 
+            // Get user details before promotion for the response
+            var userBefore = _userService.GetUserProfile(userId);
+            if (userBefore == null)
+                return NotFound("User not found");
+
             // We'll pass the requestingUserId to the service (it can be null)
-            var success = _userService.PromoteToAdmin(userId, requestingUserId);
+            var success = await _userService.PromoteToAdminAsync(userId, requestingUserId);
             if (!success)
                 return BadRequest("Cannot promote user to admin");
 
-            return Ok(new { message = "User promoted to admin" });
+            // Get updated user details
+            var userAfter = _userService.GetUserProfile(userId);
+
+            return Ok(new
+            {
+                message = "User promoted to admin",
+                user = new
+                {
+                    id = userAfter.UserId,
+                    username = userAfter.UserName,
+                    email = userAfter.Email,
+                    previousRole = userBefore.Role.ToString(),
+                    newRole = userAfter.Role.ToString(),
+                    notificationSent = true
+                }
+            });
         }
 
         [HttpPut("demote/{userId}")]
         [Authorize(Roles = "SuperAdmin")]
-        public IActionResult DemoteAdmin(string userId)
+        public async Task<IActionResult> DemoteAdmin(string userId)
         {
             // Get requesting user ID if it exists in the token
             var requestingUserId = User.FindFirst("UserId")?.Value;
@@ -79,12 +100,32 @@ namespace users.Controllers
             // The [Authorize(Roles = "SuperAdmin")] attribute already ensures this is a SuperAdmin
             // so we can proceed even if the UserId claim is missing
 
+            // Get user details before demotion for the response
+            var userBefore = _userService.GetUserProfile(userId);
+            if (userBefore == null)
+                return NotFound("User not found");
+
             // We'll pass the requestingUserId to the service (it can be null)
-            var success = _userService.DemoteAdmin(userId, requestingUserId);
+            var success = await _userService.DemoteAdminAsync(userId, requestingUserId);
             if (!success)
                 return BadRequest("Cannot demote admin");
 
-            return Ok(new { message = "Admin demoted to user" });
+            // Get updated user details
+            var userAfter = _userService.GetUserProfile(userId);
+
+            return Ok(new
+            {
+                message = "Admin demoted to user",
+                user = new
+                {
+                    id = userAfter.UserId,
+                    username = userAfter.UserName,
+                    email = userAfter.Email,
+                    previousRole = userBefore.Role.ToString(),
+                    newRole = userAfter.Role.ToString(),
+                    notificationSent = true
+                }
+            });
         }
     }
 }

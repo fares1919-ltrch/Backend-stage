@@ -26,7 +26,6 @@ namespace Backend.Services
     private readonly ILogger<DeduplicationService> _logger;
     private readonly IConfiguration _configuration;
     private readonly string _tempFilePath;
-    private readonly double _identificationThreshold;
 
     public DeduplicationService(
         RavenDbContext context,
@@ -46,27 +45,30 @@ namespace Backend.Services
       _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
       _tempFilePath = Path.Combine(Directory.GetCurrentDirectory(), "TempFiles");
 
-      // Set identification threshold from configuration or use 0.8 (80%) as default
-      _identificationThreshold = configuration.GetValue<double>("Deduplication:IdentificationThreshold", 0.8);
-
-      _logger.LogInformation("Deduplication service initialized with identification threshold: {Threshold}", _identificationThreshold);
+      // No identification threshold - we'll use the raw similarity values from the API
 
       Directory.CreateDirectory(_tempFilePath);
     }
 
-    public async Task<DeduplicationProcess> StartDeduplicationProcessAsync()
+    public async Task<DeduplicationProcess> StartDeduplicationProcessAsync(string username = null)
     {
       // Use the processes database explicitly
       using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Processes);
+      var currentUsername = username ?? "system";
       var process = new DeduplicationProcess
       {
         Id = $"DeduplicationProcesses/{Guid.NewGuid()}",
-        Name = $"Process-{Guid.NewGuid().ToString("N").Substring(0, 8)}",
-        Username = "system",
+        Name = $"Process-{DateTime.UtcNow:yyyyMMdd-HHmmss}",
+        Username = currentUsername,
+        CreatedBy = currentUsername,
         Status = "Ready to Start",
         CreatedAt = DateTime.UtcNow,
         Steps = new List<ProcessStep>(),
-        FileIds = new List<string>()
+        FileIds = new List<string>(),
+        FileCount = 0, // Will be updated when files are added
+        ProcessedFiles = 0,
+        CurrentStage = "Created",
+        CompletionNotes = ""
       };
 
       await session.StoreAsync(process);
@@ -75,20 +77,30 @@ namespace Backend.Services
       return process;
     }
 
-    public async Task<DeduplicationProcess> StartProcessAsync(DeduplicationProcessDto request)
+    public async Task<DeduplicationProcess> StartProcessAsync(DeduplicationProcessDto request, string username = null)
     {
       // Use the processes database explicitly
       using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Processes);
+      var currentUsername = username ?? "system";
+
+      // Ensure FileIds is not null and calculate the count
+      var fileIds = request.FileIds ?? new List<string>();
+      var fileCount = fileIds.Count;
+
       var process = new DeduplicationProcess
       {
         Id = $"processes/{Guid.NewGuid()}",
         Name = $"Process-{DateTime.UtcNow:yyyyMMdd-HHmmss}",
-        Username = "system",
+        Username = currentUsername,
+        CreatedBy = currentUsername,
         Status = "Ready to Start",
         CreatedAt = DateTime.UtcNow,
         Steps = new List<ProcessStep>(),
-        FileIds = request.FileIds,
-        FileCount = request.FileIds?.Count ?? 0
+        FileIds = fileIds,
+        FileCount = fileCount, // Explicitly set to match the number of files
+        ProcessedFiles = 0,
+        CurrentStage = "Created",
+        CompletionNotes = ""
       };
 
       await session.StoreAsync(process);
@@ -190,6 +202,12 @@ namespace Backend.Services
         database = "processes";
       }
 
+      // Initialize steps collection if it doesn't exist
+      if (process.Steps == null)
+      {
+        process.Steps = new List<ProcessStep>();
+      }
+
       // Use concurrency control to update the process status
       try
       {
@@ -201,6 +219,29 @@ namespace Backend.Services
             // Update process status to "In Processing"
             loadedProcess.Status = "In Processing";
             loadedProcess.ProcessStartDate = DateTime.UtcNow;
+
+            // Initialize steps collection if it doesn't exist
+            if (loadedProcess.Steps == null)
+            {
+              loadedProcess.Steps = new List<ProcessStep>();
+            }
+
+            // Add initialization step if not already present
+            if (!loadedProcess.Steps.Any(s => s.Name == "Initialization"))
+            {
+              var initStep = new ProcessStep
+              {
+                Id = Guid.NewGuid().ToString(),
+                Name = "Initialization",
+                ProcessId = processId,
+                StartDate = DateTime.UtcNow,
+                Status = "Completed",
+                EndDate = DateTime.UtcNow.AddSeconds(1),
+                ProcessedFiles = new List<string>()
+              };
+
+              loadedProcess.Steps.Add(initStep);
+            }
 
             _logger.LogInformation("Process {ProcessId} status updated to In Processing", loadedProcess.Id);
             return loadedProcess;
@@ -252,13 +293,19 @@ namespace Backend.Services
               {
                 loadedProcess.Status = "Completed";
                 loadedProcess.ProcessEndDate = DateTime.UtcNow;
+                loadedProcess.CompletedAt = DateTime.UtcNow; // Ensure CompletedAt is set
                 loadedProcess.CurrentStage = "Completed";
+                loadedProcess.ProcessedFiles = 0;
+                loadedProcess.CompletionNotes = "Done kamelna.";
 
                 _logger.LogInformation("Process {ProcessId} status updated to Completed (no files)", loadedProcess.Id);
                 return loadedProcess;
               },
               5 // Maximum number of retries
             );
+
+            // Synchronize file statuses with the completed process status
+            await SynchronizeFileStatusesWithProcessAsync(process.Id, "Completed");
           }
           catch (Exception ex)
           {
@@ -303,6 +350,23 @@ namespace Backend.Services
         identificationStep.Status = "Completed";
         identificationStep.EndDate = DateTime.UtcNow;
 
+        // Get counts of duplicate records and exceptions
+        var duplicateRecords = await _duplicateRecordService.GetDuplicateRecordsByProcessAsync(process.Id);
+        var exceptions = await _exceptionService.GetExceptionsByProcessIdAsync(process.Id);
+
+        // Calculate total processed files
+        var processedFileIds = new HashSet<string>();
+        foreach (var step in process.Steps)
+        {
+          if (step.ProcessedFiles != null)
+          {
+            foreach (var fileId in step.ProcessedFiles)
+            {
+              processedFileIds.Add(fileId);
+            }
+          }
+        }
+
         // Update process status using concurrency control
         try
         {
@@ -313,13 +377,27 @@ namespace Backend.Services
             {
               loadedProcess.Status = "Completed";
               loadedProcess.ProcessEndDate = DateTime.UtcNow;
+              loadedProcess.CompletedAt = DateTime.UtcNow; // Ensure CompletedAt is set
               loadedProcess.CurrentStage = "Completed";
 
-              _logger.LogInformation("Process {ProcessId} status updated to Completed", loadedProcess.Id);
+              // Update the processed files count
+              loadedProcess.ProcessedFiles = processedFileIds.Count;
+
+              // Add summary information to completion notes
+              loadedProcess.CompletionNotes = $"Process completed successfully. " +
+                $"Processed {processedFileIds.Count} files. " +
+                $"Found {duplicateRecords.Count} duplicate records with {duplicateRecords.Sum(dr => dr.Duplicates?.Count ?? 0)} total matches. " +
+                $"Created {exceptions.Count} exceptions.";
+
+              _logger.LogInformation("Process {ProcessId} status updated to Completed with {ProcessedFiles} files processed",
+                loadedProcess.Id, loadedProcess.ProcessedFiles);
               return loadedProcess;
             },
             5 // Maximum number of retries
           );
+
+          // Synchronize file statuses with the completed process
+          await SynchronizeFileStatusesWithProcessAsync(process.Id, "Completed");
         }
         catch (Exception ex)
         {
@@ -346,6 +424,9 @@ namespace Backend.Services
             },
             5 // Maximum number of retries
           );
+
+          // Synchronize file statuses with the error process status
+          await SynchronizeFileStatusesWithProcessAsync(process.Id, "Error");
         }
         catch (Exception storeEx)
         {
@@ -529,15 +610,13 @@ namespace Backend.Services
 
         if (identificationResult.Success && identificationResult.HasMatches)
         {
-          // Filter out the file itself (which will likely match) and apply threshold (default 80%)
-          var matches = identificationResult.Matches
-              .Where(m => m.Confidence >= _identificationThreshold)
-              .ToList();
+          // Use all matches from the API without filtering
+          var matches = identificationResult.Matches.ToList();
 
           if (matches.Any())
           {
-            _logger.LogInformation("File {FileName} matched with {MatchCount} candidates above threshold {Threshold}",
-                file.FileName, matches.Count, _identificationThreshold);
+            _logger.LogInformation("File {FileName} matched with {MatchCount} candidates",
+                file.FileName, matches.Count);
 
             // Group matches by person ID to eliminate duplicates
             var uniqueMatches = matches
@@ -549,85 +628,152 @@ namespace Backend.Services
             _logger.LogInformation("After deduplication, file {FileName} has {UniqueCount} unique person matches",
                 file.FileName, uniqueMatches.Count);
 
-            // Log only the top 3 matches to avoid huge logs
-            var topMatches = uniqueMatches.Take(3).Select(m => new { m.Name, m.Confidence, m.FaceId }).ToList();
-            _logger.LogDebug("Top unique matches: {@TopMatches}", topMatches);
+            // Check if this is a self-match (the file matching with itself)
+            // This happens when the file was just registered with T4FACE and then immediately identified
+            bool isSelfMatch = false;
 
-            // Extract person IDs from the matches
-            var personIds = uniqueMatches.Select(m => m.FaceId).ToList();
+            // Check for self-matches regardless of how many matches we have
+            // This handles cases where the same face is registered multiple times
 
-            // Try to find the actual files associated with these person IDs
-            var filesForPersons = await GetFilesByPersonIdsAsync(personIds);
+            // First, check if all matches have the same person name (indicating potential self-matches)
+            bool allSamePersonName = uniqueMatches.Count > 0 &&
+                uniqueMatches.All(m => !string.IsNullOrEmpty(m.Name) &&
+                                      m.Name == uniqueMatches[0].Name);
 
-            // Create a list of candidate file names that are actual file names, not person IDs
-            var candidateFileNames = new List<string>();
-            foreach (var match in uniqueMatches)
+            // Also check if all matches have very high confidence (>90%)
+            bool allHighConfidence = uniqueMatches.All(m => m.Confidence > 90);
+
+            if (allSamePersonName && allHighConfidence)
             {
-              if (filesForPersons.TryGetValue(match.FaceId, out var fileInfo))
+              _logger.LogInformation("All matches have the same person name and high confidence. Checking for self-match...");
+
+              // Get the person name from the first match
+              string personName = uniqueMatches[0].Name;
+
+              // Check if the person name contains a hash that might match this file
+              if (!string.IsNullOrEmpty(personName) && personName.StartsWith("person_"))
               {
-                candidateFileNames.Add(fileInfo.FileName);
+                // Extract the hash part from the person name
+                string personHash = personName.Substring("person_".Length);
+
+                // Compute a hash for this file's base64 string
+                string fileHash = ComputeHash(file.Base64String ?? string.Empty);
+                string truncatedFileHash = fileHash.Length >= personHash.Length ?
+                    fileHash.Substring(0, personHash.Length) : fileHash;
+
+                // If the hashes match or are very similar, it's likely a self-match
+                if (personHash == truncatedFileHash ||
+                    (personHash.Length >= 8 && truncatedFileHash.Length >= 8 &&
+                     personHash.Substring(0, 8) == truncatedFileHash.Substring(0, 8)))
+                {
+                  _logger.LogInformation("File {FileName} matched with itself (hash match). Ignoring self-match. Person name: {PersonName}, Hash: {Hash}",
+                      file.FileName, personName, personHash);
+                  isSelfMatch = true;
+                }
+                else
+                {
+                  _logger.LogInformation("Hash comparison: Person hash: {PersonHash}, File hash: {FileHash}",
+                      personHash, truncatedFileHash);
+                }
               }
-              else
+
+              // Also check if any of the matched IDs correspond to the current file's FaceId
+              if (!isSelfMatch && !string.IsNullOrEmpty(file.FaceId) && file.FaceId != "")
               {
-                // If we can't find a file for this person ID, use the person ID as a fallback
-                candidateFileNames.Add(match.Name);
+                foreach (var match in uniqueMatches)
+                {
+                  if (match.FaceId == file.FaceId)
+                  {
+                    _logger.LogInformation("File {FileName} matched with itself (same FaceId: {FaceId}). Ignoring self-match.",
+                        file.FileName, file.FaceId);
+                    isSelfMatch = true;
+                    break;
+                  }
+                }
               }
             }
 
-            // Create an exception record with deduplicated data
-            var exception = await _exceptionService.CreateExceptionAsync(
-                process.Id,
-                file.FileName,
-                candidateFileNames,
-                uniqueMatches.First().Confidence,
-                new Dictionary<string, object>
-                {
-                  ["matchDetails"] = uniqueMatches.Select(m => new
-                  {
-                    Name = filesForPersons.TryGetValue(m.FaceId, out var fileInfo) ? fileInfo.FileName : m.Name,
-                    Confidence = m.Confidence,
-                    PersonId = m.FaceId,
-                    FileId = filesForPersons.TryGetValue(m.FaceId, out var fi) ? fi.FileId : string.Empty
-                  }).ToList(),
-                  ["processingDate"] = DateTime.UtcNow,
-                  ["identificationThreshold"] = _identificationThreshold
-                });
-
-            // Create a list of duplicate matches
-            var duplicateMatches = uniqueMatches.Select(m => new DuplicateMatch
+            // Only proceed with duplicate record creation if this is NOT a self-match
+            if (!isSelfMatch)
             {
-              FileId = filesForPersons.TryGetValue(m.FaceId, out var fileInfo) ? fileInfo.FileId : string.Empty,
-              FileName = filesForPersons.TryGetValue(m.FaceId, out var fi) ? fi.FileName : m.Name,
-              Confidence = m.Confidence,
-              PersonId = m.FaceId
-            }).ToList();
+              // Log only the top 3 matches to avoid huge logs
+              var topMatches = uniqueMatches.Take(3).Select(m => new { m.Name, m.Confidence, m.FaceId }).ToList();
+              _logger.LogDebug("Top unique matches: {@TopMatches}", topMatches);
 
-            // Use the DuplicateRecordService to create a duplicate record with proper prefixes
-            var duplicatedRecord = await _duplicateRecordService.CreateDuplicateRecordAsync(
-              process.Id,
-              file.Id,
-              file.FileName,
-              duplicateMatches
-            );
+              // Extract person IDs from the matches
+              var personIds = uniqueMatches.Select(m => m.FaceId).ToList();
 
-            _logger.LogInformation("Stored duplicate record in dedicated database: {RecordId}", duplicatedRecord.Id);
+              // Try to find the actual files associated with these person IDs
+              var filesForPersons = await GetFilesByPersonIdsAsync(personIds);
 
-            _logger.LogWarning("File {FileName} has {MatchCount} potential duplicates", file.FileName, uniqueMatches.Count);
+              // Create a list of candidate file names that are actual file names, not person IDs
+              var candidateFileNames = new List<string>();
+              foreach (var match in uniqueMatches)
+              {
+                if (filesForPersons.TryGetValue(match.FaceId, out var fileInfo))
+                {
+                  candidateFileNames.Add(fileInfo.FileName);
+                }
+                else
+                {
+                  // If we can't find a file for this person ID, use the person ID as a fallback
+                  candidateFileNames.Add(match.Name);
+                }
+              }
+
+              // Create an exception record with deduplicated data
+              var exception = await _exceptionService.CreateExceptionAsync(
+                  process.Id,
+                  file.FileName,
+                  candidateFileNames,
+                  uniqueMatches.First().Confidence,
+                  new Dictionary<string, object>
+                  {
+                    ["matchDetails"] = uniqueMatches.Select(m => new
+                    {
+                      Name = filesForPersons.TryGetValue(m.FaceId, out var fileInfo) ? fileInfo.FileName : m.Name,
+                      Confidence = m.Confidence,
+                      PersonId = m.FaceId,
+                      FileId = filesForPersons.TryGetValue(m.FaceId, out var fi) ? fi.FileId : string.Empty
+                    }).ToList(),
+                    ["processingDate"] = DateTime.UtcNow
+                  });
+
+              // Create a list of duplicate matches
+              var duplicateMatches = uniqueMatches.Select(m => new DuplicateMatch
+              {
+                FileId = filesForPersons.TryGetValue(m.FaceId, out var fileInfo) ? fileInfo.FileId : string.Empty,
+                FileName = filesForPersons.TryGetValue(m.FaceId, out var fi) ? fi.FileName : m.Name,
+                Confidence = m.Confidence,
+                PersonId = m.FaceId
+              }).ToList();
+
+              // Use the DuplicateRecordService to create a duplicate record with proper prefixes
+              var duplicatedRecord = await _duplicateRecordService.CreateDuplicateRecordAsync(
+                process.Id,
+                file.Id,
+                file.FileName,
+                duplicateMatches
+              );
+
+              _logger.LogInformation("Stored duplicate record in dedicated database: {RecordId}", duplicatedRecord.Id);
+
+              _logger.LogWarning("File {FileName} has {MatchCount} potential duplicates", file.FileName, uniqueMatches.Count);
+            }
+            else
+            {
+              _logger.LogInformation("No matches found for file {FileName}", file.FileName);
+            }
           }
-          else
+          else if (!identificationResult.Success)
           {
-            _logger.LogInformation("No matches above threshold {Threshold} found for file {FileName}",
-                _identificationThreshold, file.FileName);
+            _logger.LogWarning("Identification failed for file {FileName}: {ErrorMessage}",
+                file.FileName, identificationResult.ErrorMessage);
           }
-        }
-        else if (!identificationResult.Success)
-        {
-          _logger.LogWarning("Identification failed for file {FileName}: {ErrorMessage}",
-              file.FileName, identificationResult.ErrorMessage);
-        }
 
-        // Add to processed files
-        step.ProcessedFiles.Add(file.Id);
+          // Add to processed files
+          step.ProcessedFiles.Add(file.Id);
+        }
       }
       catch (Exception ex)
       {
@@ -694,7 +840,7 @@ namespace Backend.Services
         // person IDs in the face recognition system and files in your database
         foreach (var file in allFiles)
         {
-          if (!string.IsNullOrEmpty(file.FaceId) && personIds.Contains(file.FaceId))
+          if (!string.IsNullOrEmpty(file.FaceId) && file.FaceId != "" && personIds.Contains(file.FaceId))
           {
             result[file.FaceId] = new FileInfo
             {
@@ -719,9 +865,9 @@ namespace Backend.Services
     // Helper class to store file information
     private class FileInfo
     {
-      public string FileId { get; set; }
-      public string FileName { get; set; }
-      public string FilePath { get; set; }
+      public string FileId { get; set; } = string.Empty;
+      public string FileName { get; set; } = string.Empty;
+      public string FilePath { get; set; } = string.Empty;
     }
 
     public async Task PauseProcessAsync(string processId)
@@ -815,7 +961,7 @@ namespace Backend.Services
       }
     }
 
-    public async Task CleanupProcessAsync(string processId)
+    public async Task CleanupProcessAsync(string processId, string username = null)
     {
       // Get the process using our improved GetProcessAsync method
       var process = await GetProcessAsync(processId);
@@ -823,6 +969,9 @@ namespace Backend.Services
 
       // Always use the processes database
       string database = "processes";
+
+      // Use the provided username or fall back to the process username or system
+      var cleanupUsername = username ?? process.Username ?? process.CreatedBy ?? "system";
 
       // Use concurrency control to update the process status
       process = await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
@@ -833,9 +982,10 @@ namespace Backend.Services
           // Update process status to "Cleaning"
           loadedProcess.Status = "Cleaning";
           loadedProcess.CleanupDate = DateTime.UtcNow;
-          loadedProcess.CleanupUsername = "system"; // Should be replaced with actual username in controller
+          loadedProcess.CleanupUsername = cleanupUsername;
+          loadedProcess.CurrentStage = "Cleaning";
 
-          _logger.LogInformation("Process {ProcessId} status updated to Cleaning", loadedProcess.Id);
+          _logger.LogInformation("Process {ProcessId} status updated to Cleaning by {Username}", loadedProcess.Id, cleanupUsername);
           return loadedProcess;
         },
         5 // Maximum number of retries
@@ -858,7 +1008,7 @@ namespace Backend.Services
           try
           {
             // Delete from T4Face if we have a FaceId
-            if (!string.IsNullOrEmpty(file.FaceId))
+            if (!string.IsNullOrEmpty(file.FaceId) && file.FaceId != "")
             {
               _logger.LogInformation("Would delete face with ID {FaceId} from T4Face (simulated)", file.FaceId);
               // In a real implementation, you would call T4Face API to delete the face
@@ -897,7 +1047,14 @@ namespace Backend.Services
           async (finalSession, loadedProcess) =>
           {
             loadedProcess.Status = "Cleaned";
+            loadedProcess.CurrentStage = "Cleaned";
             loadedProcess.CompletionNotes = $"Successfully cleaned up {successCount} files. {errorCount} files had errors.";
+
+            // Ensure CompletedAt is set if it wasn't already
+            if (loadedProcess.CompletedAt == null)
+            {
+              loadedProcess.CompletedAt = loadedProcess.ProcessEndDate ?? DateTime.UtcNow;
+            }
 
             _logger.LogInformation("Process {ProcessId} cleanup completed. Success: {SuccessCount}, Errors: {ErrorCount}",
                 loadedProcess.Id, successCount, errorCount);
@@ -905,6 +1062,9 @@ namespace Backend.Services
           },
           5 // Maximum number of retries
         );
+
+        // Synchronize file statuses with the cleaned process status
+        await SynchronizeFileStatusesWithProcessAsync(process.Id, "Cleaned");
       }
       catch (Exception ex)
       {
@@ -926,6 +1086,9 @@ namespace Backend.Services
             },
             5 // Maximum number of retries
           );
+
+          // Synchronize file statuses with the error process status
+          await SynchronizeFileStatusesWithProcessAsync(process.Id, "Error");
         }
         catch (Exception storeEx)
         {
@@ -934,6 +1097,109 @@ namespace Backend.Services
         }
 
         throw;
+      }
+    }
+
+    // Helper method to compute a hash for a string (similar to the one in T4FaceService)
+    private static string ComputeHash(string input)
+    {
+      if (string.IsNullOrEmpty(input))
+      {
+        return string.Empty;
+      }
+
+      var bytes = System.Text.Encoding.UTF8.GetBytes(input);
+      var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+      return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Synchronizes file statuses with the process status to ensure consistency
+    /// </summary>
+    /// <param name="processId">The ID of the process</param>
+    /// <param name="processStatus">The current status of the process</param>
+    private async Task SynchronizeFileStatusesWithProcessAsync(string processId, string processStatus)
+    {
+      try
+      {
+        _logger.LogInformation("Synchronizing file statuses for process {ProcessId} with status {Status}", processId, processStatus);
+
+        // Get all files for this process
+        var files = await GetFilesForProcessAsync(processId);
+        if (files.Count == 0)
+        {
+          _logger.LogInformation("No files found to synchronize for process {ProcessId}", processId);
+          return;
+        }
+
+        int updatedCount = 0;
+
+        // Update file statuses based on process status
+        using var fileSession = _context.OpenAsyncSession(database: "Files");
+        foreach (var file in files)
+        {
+          var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
+          if (dbFile == null)
+          {
+            _logger.LogWarning("File with ID {FileId} not found during status synchronization", file.Id);
+            continue;
+          }
+
+          bool needsUpdate = false;
+
+          // Set appropriate file status based on process status
+          if (processStatus == "Completed")
+          {
+            // If process is completed but file still shows as "Uploaded" or in processing state
+            if (dbFile.Status == "Uploaded" || dbFile.ProcessStatus == "Processing")
+            {
+              dbFile.Status = "Inserted";
+              dbFile.ProcessStatus = "Completed";
+              needsUpdate = true;
+            }
+          }
+          else if (processStatus == "Cleaned")
+          {
+            // If process is cleaned but file is not marked as deleted
+            if (dbFile.Status != "Deleted")
+            {
+              dbFile.Status = "Deleted";
+              dbFile.ProcessStatus = "Completed";
+              needsUpdate = true;
+            }
+          }
+          else if (processStatus == "Error")
+          {
+            // If process has error, mark file process status accordingly
+            if (dbFile.ProcessStatus != "Failed")
+            {
+              dbFile.ProcessStatus = "Failed";
+              needsUpdate = true;
+            }
+          }
+
+          if (needsUpdate)
+          {
+            updatedCount++;
+          }
+        }
+
+        // Save all changes at once if any files were updated
+        if (updatedCount > 0)
+        {
+          await fileSession.SaveChangesAsync();
+          _logger.LogInformation("Updated {Count} files to match process status {Status} for process {ProcessId}",
+            updatedCount, processStatus, processId);
+        }
+        else
+        {
+          _logger.LogInformation("No file status updates needed for process {ProcessId}", processId);
+        }
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error synchronizing file statuses for process {ProcessId}", processId);
+        // Don't throw the exception - this is a background operation that shouldn't fail the main process
       }
     }
   }

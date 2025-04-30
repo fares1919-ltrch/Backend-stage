@@ -65,12 +65,31 @@ sequenceDiagram
 - **Response:** Returns authentication token and user information
   ```json
   {
-    "userId": "users/1-A",
-    "username": "john_doe",
-    "email": "john@example.com",
-    "role": 0,
-    "isValidated": false,
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    "user": {
+      "id": "users/1-A",
+      "userName": "john_doe",
+      "email": "john@example.com",
+      "role": 0,
+      "validated": false
+    },
+    "message": "Your account has been created. Please wait for an administrator to validate your account.",
+    "isFirstUser": false,
+    "isValidated": false
+  }
+  ```
+- **First User Response:** Special response for the first user registration
+  ```json
+  {
+    "user": {
+      "id": "users/1-A",
+      "userName": "admin_user",
+      "email": "admin@example.com",
+      "role": 2,
+      "validated": true
+    },
+    "message": "Your account has been created as a Super Administrator with full system access. You can log in immediately.",
+    "isFirstUser": true,
+    "isValidated": true
   }
   ```
 - **Status Codes:**
@@ -198,6 +217,23 @@ sequenceDiagram
 4. Client includes cookie in subsequent requests for authentication
 5. Protected endpoints verify token signature and claims
 6. Expired tokens can be refreshed using refresh token
+
+## First User Registration
+
+The first user to register in the system receives special treatment:
+
+1. Automatically assigned the SuperAdmin role
+2. Account is automatically validated (no admin approval needed)
+3. Receives a welcome email with information about their SuperAdmin privileges
+4. Can immediately log in and access all system features
+
+## Role Change Notifications
+
+When a user's role changes, they receive email notifications:
+
+1. **Promotion to Admin**: User receives an email detailing their new administrative privileges
+2. **Demotion from Admin**: User receives an email explaining their updated access level
+3. **First User (SuperAdmin)**: Receives a special welcome email with SuperAdmin privileges
 
 ## Role-Based Authorization
 

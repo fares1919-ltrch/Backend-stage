@@ -30,31 +30,83 @@ namespace Backend.Services
 
         public async Task<DuplicatedRecord> GetDuplicateRecordAsync(string recordId)
         {
-            using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Deduplicated);
-
-            // Handle record IDs with or without the "DuplicatedRecords/" prefix
-            var normalizedRecordId = recordId;
-            if (!recordId.StartsWith("DuplicatedRecords/"))
+            if (string.IsNullOrEmpty(recordId))
             {
-                normalizedRecordId = $"DuplicatedRecords/{recordId}";
-                _logger.LogInformation("Normalized record ID from {RecordId} to {NormalizedRecordId}",
-                    recordId, normalizedRecordId);
+                _logger.LogError("Record ID is null or empty");
+                throw new ArgumentException("Record ID cannot be null or empty");
             }
 
-            // Try to load with the normalized ID first
-            var record = await session.LoadAsync<DuplicatedRecord>(normalizedRecordId);
+            using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Deduplicated);
 
-            // If not found, try with the original ID
-            if (record == null && normalizedRecordId != recordId)
+            // Try multiple ID formats to be more flexible
+            var possibleIds = new List<string>();
+
+            // Format 1: As provided
+            possibleIds.Add(recordId);
+
+            // Format 2: With DuplicatedRecords/ prefix
+            if (!recordId.StartsWith("DuplicatedRecords/"))
             {
-                _logger.LogInformation("Record not found with normalized ID, trying original ID: {RecordId}", recordId);
-                record = await session.LoadAsync<DuplicatedRecord>(recordId);
+                possibleIds.Add($"DuplicatedRecords/{recordId}");
+            }
+
+            // Format 3: Without DuplicatedRecords/ prefix
+            if (recordId.StartsWith("DuplicatedRecords/"))
+            {
+                possibleIds.Add(recordId.Substring("DuplicatedRecords/".Length));
+            }
+
+            // Format 4: With DuplicatedRecords/ prefix and without dashes
+            if (recordId.Contains("-"))
+            {
+                var noDashes = recordId.Replace("-", "");
+                possibleIds.Add($"DuplicatedRecords/{noDashes}");
+            }
+
+            _logger.LogInformation("Trying to find duplicate record with ID {RecordId} using {Count} possible formats",
+                recordId, possibleIds.Count);
+
+            // Try each possible ID format
+            DuplicatedRecord record = null;
+            foreach (var id in possibleIds)
+            {
+                _logger.LogDebug("Trying to load record with ID: {Id}", id);
+                record = await session.LoadAsync<DuplicatedRecord>(id);
+                if (record != null)
+                {
+                    _logger.LogInformation("Found record with ID format: {Id}", id);
+                    break;
+                }
+            }
+
+            // If still not found, try a query approach
+            if (record == null)
+            {
+                _logger.LogInformation("Record not found with direct loading, trying query approach");
+
+                // Extract GUID part if it exists
+                string guidPart = recordId;
+                if (recordId.Contains("/"))
+                {
+                    guidPart = recordId.Split('/').Last();
+                }
+
+                // Try to query by ID ending with the GUID part
+                var results = await session.Query<DuplicatedRecord>()
+                    .Where(r => r.Id.EndsWith(guidPart))
+                    .ToListAsync();
+
+                if (results.Any())
+                {
+                    record = results.First();
+                    _logger.LogInformation("Found record by query: {RecordId}", record.Id);
+                }
             }
 
             if (record == null)
             {
-                _logger.LogWarning("Duplicate record with ID {RecordId} not found", recordId);
-                throw new Exception($"Duplicate record with ID {recordId} not found");
+                _logger.LogWarning("Duplicate record with ID {RecordId} not found after trying multiple formats", recordId);
+                throw new Exception($"Duplicate record with ID {recordId} not found. Please check if the ID is correct and try again.");
             }
 
             return record;
@@ -87,90 +139,64 @@ namespace Backend.Services
 
         public async Task<DuplicatedRecord> ConfirmDuplicateRecordAsync(string recordId, string username, string notes = null)
         {
+            // Use our improved GetDuplicateRecordAsync method to find the record
+            var record = await GetDuplicateRecordAsync(recordId);
+
             using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Deduplicated);
 
-            // Handle record IDs with or without the "DuplicatedRecords/" prefix
-            var normalizedRecordId = recordId;
-            if (!recordId.StartsWith("DuplicatedRecords/"))
+            // Load the record in this session
+            var sessionRecord = await session.LoadAsync<DuplicatedRecord>(record.Id);
+
+            if (sessionRecord == null)
             {
-                normalizedRecordId = $"DuplicatedRecords/{recordId}";
-                _logger.LogInformation("Normalized record ID from {RecordId} to {NormalizedRecordId}",
-                    recordId, normalizedRecordId);
+                _logger.LogError("Failed to load record {RecordId} in confirmation session", record.Id);
+                throw new Exception($"Failed to load record {record.Id} for confirmation");
             }
 
-            // Try to load with the normalized ID first
-            var record = await session.LoadAsync<DuplicatedRecord>(normalizedRecordId);
-
-            // If not found, try with the original ID
-            if (record == null && normalizedRecordId != recordId)
-            {
-                _logger.LogInformation("Record not found with normalized ID, trying original ID: {RecordId}", recordId);
-                record = await session.LoadAsync<DuplicatedRecord>(recordId);
-            }
-
-            if (record == null)
-            {
-                _logger.LogWarning("Duplicate record with ID {RecordId} not found", recordId);
-                throw new Exception($"Duplicate record with ID {recordId} not found");
-            }
-
-            record.Status = "Confirmed";
-            record.ConfirmationUser = username;
-            record.ConfirmationDate = DateTime.UtcNow;
+            sessionRecord.Status = "Confirmed";
+            sessionRecord.ConfirmationUser = username;
+            sessionRecord.ConfirmationDate = DateTime.UtcNow;
 
             if (!string.IsNullOrEmpty(notes))
             {
-                record.Notes = notes;
+                sessionRecord.Notes = notes;
             }
 
             await session.SaveChangesAsync();
-            _logger.LogInformation("Duplicate record {RecordId} confirmed by {Username}", recordId, username);
+            _logger.LogInformation("Duplicate record {RecordId} confirmed by {Username}", record.Id, username);
 
-            return record;
+            return sessionRecord;
         }
 
         public async Task<DuplicatedRecord> RejectDuplicateRecordAsync(string recordId, string username, string notes = null)
         {
+            // Use our improved GetDuplicateRecordAsync method to find the record
+            var record = await GetDuplicateRecordAsync(recordId);
+
             using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Deduplicated);
 
-            // Handle record IDs with or without the "DuplicatedRecords/" prefix
-            var normalizedRecordId = recordId;
-            if (!recordId.StartsWith("DuplicatedRecords/"))
+            // Load the record in this session
+            var sessionRecord = await session.LoadAsync<DuplicatedRecord>(record.Id);
+
+            if (sessionRecord == null)
             {
-                normalizedRecordId = $"DuplicatedRecords/{recordId}";
-                _logger.LogInformation("Normalized record ID from {RecordId} to {NormalizedRecordId}",
-                    recordId, normalizedRecordId);
+                _logger.LogError("Failed to load record {RecordId} in rejection session", record.Id);
+                throw new Exception($"Failed to load record {record.Id} for rejection");
             }
 
-            // Try to load with the normalized ID first
-            var record = await session.LoadAsync<DuplicatedRecord>(normalizedRecordId);
-
-            // If not found, try with the original ID
-            if (record == null && normalizedRecordId != recordId)
-            {
-                _logger.LogInformation("Record not found with normalized ID, trying original ID: {RecordId}", recordId);
-                record = await session.LoadAsync<DuplicatedRecord>(recordId);
-            }
-
-            if (record == null)
-            {
-                _logger.LogWarning("Duplicate record with ID {RecordId} not found", recordId);
-                throw new Exception($"Duplicate record with ID {recordId} not found");
-            }
-
-            record.Status = "Rejected";
-            record.ConfirmationUser = username;
-            record.ConfirmationDate = DateTime.UtcNow;
+            sessionRecord.Status = "Rejected";
+            sessionRecord.ConfirmationUser = username;
+            sessionRecord.ConfirmationDate = DateTime.UtcNow;
 
             if (!string.IsNullOrEmpty(notes))
             {
-                record.Notes = notes;
+                sessionRecord.Notes = notes;
             }
 
             await session.SaveChangesAsync();
-            _logger.LogInformation("Duplicate record {RecordId} rejected by {Username}", recordId, username);
+            _logger.LogInformation("Duplicate record {RecordId} rejected by {Username}", record.Id, username);
 
-            return record;
+            return sessionRecord;
         }
 
         public async Task<List<DuplicatedRecord>> GetDuplicatesByStatusAsync(string status)

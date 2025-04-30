@@ -10,8 +10,8 @@ namespace Backend.Models
         public string Base64String { get; set; }
         public string Status { get; set; } = "Uploaded";
         public DateTime CreatedAt { get; set; }
-        public string? FaceId { get; set; }
-        public DateTime? ProcessStartDate { get; set; }
+        public string FaceId { get; set; } = "";
+        public DateTime ProcessStartDate { get; set; } = DateTime.MinValue;
         public string ProcessStatus { get; set; } = "Pending";
         public bool Photodeduplique { get; set; } = false;
     }

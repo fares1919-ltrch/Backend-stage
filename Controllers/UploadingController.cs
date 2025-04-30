@@ -16,6 +16,7 @@ using ICSharpCode.SharpZipLib.GZip;
 using Files.Models;
 using Raven.Client.Documents.Linq;
 using Raven.Client.Documents.Session;
+using DeduplicationFile = Backend.Models.DeduplicationFile;
 
 namespace upp.Controllers
 {
@@ -26,12 +27,18 @@ namespace upp.Controllers
     private readonly UploadService _uploadService;
     private readonly RavenDbContext _dbContext;
     private readonly ILogger<UploadingController> _logger;
+    private readonly ExceptionService _exceptionService;
 
-    public UploadingController(UploadService uploadService, RavenDbContext dbContext, ILogger<UploadingController> logger)
+    public UploadingController(
+        UploadService uploadService,
+        RavenDbContext dbContext,
+        ILogger<UploadingController> logger,
+        ExceptionService exceptionService)
     {
       _uploadService = uploadService;
       _dbContext = dbContext;
       _logger = logger;
+      _exceptionService = exceptionService;
     }
 
     [HttpPost("clear-temp")]
@@ -86,16 +93,22 @@ namespace upp.Controllers
 
           // Create a new process for this conflict
           var conflictProcessId = Guid.NewGuid().ToString();
+          var conflictUser = User.Identity?.Name ?? "anonymous";
           var conflictProcess = new DeduplicationProcess
           {
             Id = $"processes/{conflictProcessId}",
             Name = $"Conflict-{DateTime.UtcNow:yyyyMMdd-HHmmss}",
-            Username = User.Identity?.Name ?? "anonymous",
+            Username = conflictUser,
+            CreatedBy = conflictUser,
             Status = "Conflict Detected",
             CreatedAt = DateTime.UtcNow,
             Files = new List<DeduplicationFile>(),
             Steps = new List<ProcessStep>(),
-            FileIds = new List<string>()
+            FileIds = new List<string>(),
+            FileCount = 0,
+            ProcessedFiles = 0,
+            CurrentStage = "Conflict Detected",
+            CompletionNotes = ""
           };
 
           using (var session = _dbContext.OpenAsyncSession(RavenDbContext.DatabaseType.Processes))
@@ -123,17 +136,7 @@ namespace upp.Controllers
           });
         }
 
-        // Handle single image upload for testing purposes
-        if (file != null && (file.FileName.EndsWith(".jpg") || file.FileName.EndsWith(".jpeg") || file.FileName.EndsWith(".png")))
-        {
-          var base64 = await _uploadService.ProcessImageAsync(file);
-          return Ok(new
-          {
-            success = true,
-            message = "Image uploaded successfully",
-            base64 = base64,
-          });
-        }
+        // Individual image upload has been removed - only tar.gz files are supported
 
         // Handle tar.gz upload as required by documentation
         if (!file.FileName.EndsWith(".tar.gz"))
@@ -143,16 +146,22 @@ namespace upp.Controllers
 
         // Create a new deduplication process
         var processId = Guid.NewGuid().ToString();
+        var currentUser = User.Identity?.Name ?? "anonymous";
         var process = new DeduplicationProcess
         {
           Id = $"processes/{processId}",
           Name = $"Process-{DateTime.UtcNow:yyyyMMdd-HHmmss}",
-          Username = User.Identity?.Name ?? "anonymous",
+          Username = currentUser,
+          CreatedBy = currentUser,
           Status = "Ready to Start",
           CreatedAt = DateTime.UtcNow,
           Files = new List<DeduplicationFile>(),
           Steps = new List<ProcessStep>(),
-          FileIds = new List<string>()
+          FileIds = new List<string>(),
+          FileCount = 0,
+          ProcessedFiles = 0,
+          CurrentStage = "Created",
+          CompletionNotes = ""
         };
 
         // Create directory for this process
@@ -164,6 +173,99 @@ namespace upp.Controllers
         using (var fileStream = new FileStream(tarGzPath, FileMode.Create))
         {
           await file.CopyToAsync(fileStream);
+        }
+
+        // Validate the tar.gz file before attempting to extract it
+        if (!IsValidTarGzFile(tarGzPath))
+        {
+          _logger.LogWarning("Uploaded file {FileName} is not a valid tar.gz archive", file.FileName);
+
+          // Create an exception record for this error
+          try
+          {
+            // Update process status to indicate error
+            process.Status = "Error";
+
+            // Save the process even though validation failed
+            using (var session = _dbContext.OpenAsyncSession(RavenDbContext.DatabaseType.Processes))
+            {
+              await session.StoreAsync(process);
+              await session.SaveChangesAsync();
+            }
+
+            // Create an exception record
+            var exception = await _exceptionService.CreateExceptionAsync(
+                process.Id,
+                file.FileName,
+                new List<string> { "Invalid Archive Format" },
+                0.0,
+                new Dictionary<string, object>
+                {
+                  ["errorType"] = "ValidationError",
+                  ["errorMessage"] = "The uploaded file is not a valid tar.gz archive",
+                  ["fileName"] = file.FileName,
+                  ["fileSize"] = file.Length,
+                  ["errorDetails"] = "File header validation failed - not a valid gzip format",
+                  ["timestamp"] = DateTime.UtcNow
+                });
+
+            // Clean up temporary files
+            try
+            {
+              if (System.IO.File.Exists(tarGzPath))
+              {
+                System.IO.File.Delete(tarGzPath);
+              }
+
+              // Try to delete the process directory if it exists and is empty
+              if (Directory.Exists(processDirectory) && !Directory.EnumerateFileSystemEntries(processDirectory).Any())
+              {
+                Directory.Delete(processDirectory);
+              }
+            }
+            catch (Exception cleanupEx)
+            {
+              _logger.LogWarning(cleanupEx, "Error cleaning up temporary files for invalid archive");
+              // Continue even if cleanup fails
+            }
+
+            return BadRequest(new
+            {
+              success = false,
+              message = "The uploaded file is not a valid tar.gz archive. Please check the file and try again.",
+              errorType = "InvalidArchiveFormat",
+              processId = process.Id,
+              exceptionId = exception.Id
+            });
+          }
+          catch (Exception ex)
+          {
+            _logger.LogError(ex, "Error creating exception record for invalid archive format");
+
+            // Try to clean up even if exception creation failed
+            try
+            {
+              if (System.IO.File.Exists(tarGzPath))
+              {
+                System.IO.File.Delete(tarGzPath);
+              }
+
+              if (Directory.Exists(processDirectory))
+              {
+                Directory.Delete(processDirectory, true);
+              }
+            }
+            catch
+            {
+              // Ignore cleanup errors in this case
+            }
+
+            return BadRequest(new
+            {
+              success = false,
+              message = "The uploaded file is not a valid tar.gz archive. Please check the file and try again."
+            });
+          }
         }
 
         // Extract the tar.gz file
@@ -199,24 +301,68 @@ namespace upp.Controllers
                 byte[] fileBytes = System.IO.File.ReadAllBytes(filePath);
                 string base64String = Convert.ToBase64String(fileBytes);
 
-                // Create file record
-                var fileId = Guid.NewGuid().ToString();
-                var fileModel = new DeduplicationFile
+                // Check if file with same name already exists in the database
+                var fileNameMatch = await CheckIfFileNameExistsAsync(fileName);
+                bool hasConflict = false;
+
+                if (fileNameMatch != null)
+                {
+                  _logger.LogWarning("File with name {FileName} already exists with ID {FileId}",
+                      fileName, fileNameMatch.Id);
+
+                  try
+                  {
+                    // Create a conflict record for this specific file
+                    var conflictService = new ConflictService(_dbContext);
+                    var conflict = await conflictService.CreateConflictAsync(
+                        process.Id,
+                        fileName,
+                        $"File name conflict with existing file: {fileNameMatch.Id}",
+                        1.0); // 100% confidence for exact filename match
+
+                    _logger.LogInformation("Created conflict record {ConflictId} for file {FileName}",
+                        conflict.Id, fileName);
+
+                    hasConflict = true;
+                  }
+                  catch (Exception ex)
+                  {
+                    _logger.LogError(ex, "Error creating conflict record for file {FileName}", fileName);
+                    // Continue processing even if conflict creation fails
+                  }
+                }
+
+                // Create file record with proper ID format
+                var fileGuid = Guid.NewGuid().ToString();
+                var fileId = $"files/{fileGuid}";
+                var fileModel = new Backend.Models.DeduplicationFile
                 {
                   Id = fileId,
                   FileName = fileName,
                   FilePath = filePath,
                   Base64String = base64String,
-                  Status = "Uploaded",
+                  Status = hasConflict ? "Conflict" : "Uploaded",
                   CreatedAt = DateTime.UtcNow
                 };
 
                 process.Files.Add(fileModel);
-                process.FileIds.Add(fileId);
+                process.FileIds.Add(fileId); // Store with prefix for better compatibility
                 fileCount++;
 
-                _logger.LogInformation("Added file {FileName} with ID {FileId} to process {ProcessId}",
-                    fileName, fileId, processId);
+                // Update FileCount to match the actual number of files
+                process.FileCount = fileCount;
+
+                if (hasConflict)
+                {
+                  // If there's a conflict, update the process status
+                  if (process.Status != "Conflict Detected")
+                  {
+                    process.Status = "Conflict Detected";
+                  }
+                }
+
+                _logger.LogInformation("Added file {FileName} with ID {FileId} to process {ProcessId}, Status: {Status}",
+                    fileName, fileId, processId, fileModel.Status);
               }
               else
               {
@@ -225,10 +371,187 @@ namespace upp.Controllers
             }
           }
         }
+        catch (ICSharpCode.SharpZipLib.GZip.GZipException gzEx)
+        {
+          _logger.LogError(gzEx, "Error extracting tar.gz file: Corrupted or invalid GZIP format");
+
+          // Create an exception record for this error
+          var exceptionMetadata = new Dictionary<string, object>
+          {
+            ["errorType"] = "GZipException",
+            ["errorMessage"] = gzEx.Message,
+            ["fileName"] = file.FileName,
+            ["fileSize"] = file.Length,
+            ["errorDetails"] = "The uploaded file appears to be corrupted or is not a valid tar.gz archive",
+            ["timestamp"] = DateTime.UtcNow
+          };
+
+          try
+          {
+            // Update process status to indicate error
+            process.Status = "Error";
+
+            // Save the process even though extraction failed
+            using (var session = _dbContext.OpenAsyncSession(RavenDbContext.DatabaseType.Processes))
+            {
+              await session.StoreAsync(process);
+              await session.SaveChangesAsync();
+            }
+
+            // Create an exception record
+            var exception = await _exceptionService.CreateExceptionAsync(
+                process.Id,
+                file.FileName,
+                new List<string> { "Corrupted Archive" },
+                0.0,
+                exceptionMetadata);
+
+            // Clean up temporary files
+            try
+            {
+              if (System.IO.File.Exists(tarGzPath))
+              {
+                System.IO.File.Delete(tarGzPath);
+              }
+
+              // Try to delete the process directory if it exists and is empty
+              if (Directory.Exists(processDirectory) && !Directory.EnumerateFileSystemEntries(processDirectory).Any())
+              {
+                Directory.Delete(processDirectory);
+              }
+            }
+            catch (Exception cleanupEx)
+            {
+              _logger.LogWarning(cleanupEx, "Error cleaning up temporary files for corrupted archive");
+              // Continue even if cleanup fails
+            }
+
+            return BadRequest(new
+            {
+              success = false,
+              message = "The uploaded file is corrupted or not a valid tar.gz archive",
+              errorType = "CorruptedArchive",
+              processId = process.Id,
+              exceptionId = exception.Id
+            });
+          }
+          catch (Exception ex)
+          {
+            _logger.LogError(ex, "Error creating exception record for corrupted archive");
+
+            // Try to clean up even if exception creation failed
+            try
+            {
+              if (System.IO.File.Exists(tarGzPath))
+              {
+                System.IO.File.Delete(tarGzPath);
+              }
+
+              if (Directory.Exists(processDirectory))
+              {
+                Directory.Delete(processDirectory, true);
+              }
+            }
+            catch
+            {
+              // Ignore cleanup errors in this case
+            }
+
+            return StatusCode(500, new
+            {
+              success = false,
+              message = "The uploaded file is corrupted and could not be processed: " + gzEx.Message
+            });
+          }
+        }
         catch (Exception ex)
         {
           _logger.LogError(ex, "Error extracting tar.gz file");
-          return StatusCode(500, new { success = false, message = "Error extracting tar.gz file: " + ex.Message });
+
+          // Create an exception record for this error
+          try
+          {
+            // Update process status to indicate error
+            process.Status = "Error";
+
+            // Save the process even though extraction failed
+            using (var session = _dbContext.OpenAsyncSession(RavenDbContext.DatabaseType.Processes))
+            {
+              await session.StoreAsync(process);
+              await session.SaveChangesAsync();
+            }
+
+            // Create an exception record
+            var exception = await _exceptionService.CreateExceptionAsync(
+                process.Id,
+                file.FileName,
+                new List<string> { "Archive Extraction Error" },
+                0.0,
+                new Dictionary<string, object>
+                {
+                  ["errorType"] = ex.GetType().Name,
+                  ["errorMessage"] = ex.Message,
+                  ["fileName"] = file.FileName,
+                  ["fileSize"] = file.Length,
+                  ["timestamp"] = DateTime.UtcNow
+                });
+
+            // Clean up temporary files
+            try
+            {
+              if (System.IO.File.Exists(tarGzPath))
+              {
+                System.IO.File.Delete(tarGzPath);
+              }
+
+              // Try to delete the process directory if it exists and is empty
+              if (Directory.Exists(processDirectory) && !Directory.EnumerateFileSystemEntries(processDirectory).Any())
+              {
+                Directory.Delete(processDirectory);
+              }
+            }
+            catch (Exception cleanupEx)
+            {
+              _logger.LogWarning(cleanupEx, "Error cleaning up temporary files for extraction error");
+              // Continue even if cleanup fails
+            }
+
+            return StatusCode(500, new
+            {
+              success = false,
+              message = "Error extracting tar.gz file: " + ex.Message,
+              processId = process.Id,
+              exceptionId = exception.Id
+            });
+          }
+          catch (Exception innerEx)
+          {
+            _logger.LogError(innerEx, "Error creating exception record for extraction error");
+
+            // Try to clean up even if exception creation failed
+            try
+            {
+              if (System.IO.File.Exists(tarGzPath))
+              {
+                System.IO.File.Delete(tarGzPath);
+              }
+
+              if (Directory.Exists(processDirectory))
+              {
+                Directory.Delete(processDirectory, true);
+              }
+            }
+            catch
+            {
+              // Ignore cleanup errors in this case
+            }
+
+            return StatusCode(500, new
+            {
+              success = false,
+              message = "Error extracting tar.gz file: " + ex.Message
+            });
+          }
         }
 
         if (fileCount == 0)
@@ -256,7 +579,7 @@ namespace upp.Controllers
             foreach (var fileItem in process.Files)
             {
               // Convert DeduplicationFile to FileModel for consistency
-              var fileModel = new FileModel
+              var fileModel = new Files.Models.FileModel
               {
                 Id = fileItem.Id,
                 FileName = fileItem.FileName,
@@ -265,8 +588,8 @@ namespace upp.Controllers
                 Status = fileItem.Status,
                 CreatedAt = fileItem.CreatedAt,
                 FaceId = fileItem.FaceId,
-                ProcessStartDate = fileItem.ProcessStartDate,
                 ProcessStatus = fileItem.ProcessStatus,
+                ProcessStartDate = fileItem.ProcessStartDate,
                 Photodeduplique = fileItem.Photodeduplique
               };
 
@@ -281,11 +604,35 @@ namespace upp.Controllers
           // Delete the original tar.gz file
           System.IO.File.Delete(tarGzPath);
 
+          // Check if there were any conflicts
+          int conflictCount = process.Files.Count(f => f.Status == "Conflict");
+          bool hasConflicts = conflictCount > 0;
+
+          // Update process status if conflicts were detected
+          if (hasConflicts && process.Status != "Conflict Detected")
+          {
+            process.Status = "Conflict Detected";
+
+            // Save the updated process status
+            using (var session = _dbContext.OpenSession(database: "Processes"))
+            {
+              session.Store(process);
+              session.SaveChanges();
+            }
+          }
+
+          string message = hasConflicts
+              ? $"Successfully uploaded and extracted {fileCount} files. {fileCount - conflictCount} files are ready to process. {conflictCount} files have conflicts."
+              : $"Successfully uploaded and extracted {fileCount} files. Process is ready to start.";
+
           return Ok(new
           {
             success = true,
             processId = processId,
-            message = $"Successfully uploaded and extracted {fileCount} files. Process is ready to start."
+            message = message,
+            warning = hasConflicts,
+            fileCount = fileCount,
+            conflictCount = conflictCount
           });
         }
         catch (Exception ex)
@@ -301,22 +648,211 @@ namespace upp.Controllers
       }
     }
 
-    private bool IsImageFile(string fileName)
+    private static bool IsImageFile(string fileName)
     {
       string extension = Path.GetExtension(fileName).ToLowerInvariant();
       return extension == ".jpg" || extension == ".jpeg" || extension == ".png";
     }
 
-    private async Task<Files.Models.FileModel> CheckIfFileNameExistsAsync(string fileName)
+    /// <summary>
+    /// Checks if a file is a valid tar.gz archive by examining its header
+    /// </summary>
+    /// <param name="filePath">Path to the file to check</param>
+    /// <returns>True if the file is a valid tar.gz archive, false otherwise</returns>
+    private bool IsValidTarGzFile(string filePath)
     {
-      // Use a synchronous session instead of an async session
-      using var session = _dbContext.OpenSession(database: "Files");
-      var query = session.Query<Files.Models.FileModel>()
-          .Where(f => f.FileName == fileName && f.Status != "Deleted");
+      try
+      {
+        // Check if the file exists
+        if (!System.IO.File.Exists(filePath))
+        {
+          _logger.LogWarning("File {FilePath} does not exist", filePath);
+          return false;
+        }
 
-      // Use ToList() with synchronous session
-      var existingFiles = query.ToList();
-      return existingFiles.FirstOrDefault();
+        // Check file size
+        var fileInfo = new FileInfo(filePath);
+        if (fileInfo.Length < 18) // Minimum size for a valid gzip file
+        {
+          _logger.LogWarning("File {FilePath} is too small to be a valid tar.gz file", filePath);
+          return false;
+        }
+
+        // Check gzip header magic bytes
+        using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+        {
+          byte[] header = new byte[2];
+          int bytesRead = fileStream.Read(header, 0, 2);
+
+          if (bytesRead < 2 || header[0] != 0x1F || header[1] != 0x8B)
+          {
+            _logger.LogWarning("File {FilePath} does not have a valid gzip header", filePath);
+            return false;
+          }
+        }
+
+        // Try to open the file as a gzip stream
+        try
+        {
+          using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+          using (var gzipStream = new GZipInputStream(fileStream))
+          {
+            byte[] buffer = new byte[4096];
+            gzipStream.Read(buffer, 0, 1); // Try to read at least one byte
+          }
+
+          return true;
+        }
+        catch (Exception ex)
+        {
+          _logger.LogWarning(ex, "Error validating tar.gz file {FilePath}", filePath);
+          return false;
+        }
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error checking if file {FilePath} is a valid tar.gz archive", filePath);
+        return false;
+      }
+    }
+
+    /// <summary>
+    /// Gets a specific file by ID
+    /// </summary>
+    /// <param name="fileId">The ID of the file to retrieve</param>
+    /// <returns>The file details</returns>
+    [HttpGet("file/{fileId}")]
+    [ProducesResponseType(typeof(Files.Models.FileModel), 200)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(401)]
+    public async Task<IActionResult> GetFile(string fileId)
+    {
+      try
+      {
+        _logger.LogInformation("Getting file with ID: {FileId}", fileId);
+
+        if (string.IsNullOrEmpty(fileId))
+        {
+          return BadRequest(new { message = "File ID is required" });
+        }
+
+        // Ensure the fileId has the correct format
+        string formattedFileId = fileId;
+        if (!fileId.StartsWith("files/") && !fileId.Contains("/"))
+        {
+          formattedFileId = $"files/{fileId}";
+          _logger.LogInformation("Reformatted file ID from {OriginalId} to {FormattedId}", fileId, formattedFileId);
+        }
+
+        // Load the file from the database
+        using var session = _dbContext.OpenAsyncSession(database: "Files");
+        var file = await session.LoadAsync<Files.Models.FileModel>(formattedFileId);
+
+        if (file == null)
+        {
+          _logger.LogWarning("File with ID {FileId} not found", formattedFileId);
+          return NotFound(new { message = $"File with ID {fileId} not found" });
+        }
+
+        // Add Base64 data for frontend display if it's missing
+        if (string.IsNullOrEmpty(file.Base64String) && !string.IsNullOrEmpty(file.FilePath))
+        {
+          try
+          {
+            if (System.IO.File.Exists(file.FilePath))
+            {
+              byte[] fileBytes = System.IO.File.ReadAllBytes(file.FilePath);
+              string base64 = Convert.ToBase64String(fileBytes);
+              string mimeType = GetMimeType(file.FileName);
+              file.Base64String = base64; // Just the base64 string without the data URL prefix
+            }
+          }
+          catch (Exception ex)
+          {
+            _logger.LogError(ex, "Error loading file data for {FileId}", file.Id);
+          }
+        }
+
+        return Ok(file);
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error getting file {FileId}", fileId);
+        return BadRequest(new { message = ex.Message });
+      }
+    }
+
+    /// <summary>
+    /// Gets the MIME type for a file based on its extension
+    /// </summary>
+    /// <param name="fileName">The name of the file</param>
+    /// <returns>The MIME type</returns>
+    private string GetMimeType(string fileName)
+    {
+      string extension = Path.GetExtension(fileName).ToLowerInvariant();
+      return extension switch
+      {
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".png" => "image/png",
+        ".gif" => "image/gif",
+        _ => "application/octet-stream"
+      };
+    }
+
+    private Task<Files.Models.FileModel?> CheckIfFileNameExistsAsync(string fileName)
+    {
+      try
+      {
+        _logger.LogInformation("Checking if file with name {FileName} exists in the database", fileName);
+
+        // Use a synchronous session instead of an async session
+        using var session = _dbContext.OpenSession(database: "Files");
+
+        // RavenDB doesn't support string methods like ToLower() in queries
+        // Instead, we'll get all non-deleted files and filter in memory
+        var allActiveFiles = session.Query<Files.Models.FileModel>()
+            .Where(f => f.Status != "Deleted")
+            .ToList();
+
+        // Normalize the filename for comparison (trim)
+        string normalizedFileName = fileName.Trim();
+
+        // Find exact matches (case-insensitive)
+        var exactMatches = allActiveFiles
+            .Where(f => string.Equals(f.FileName, normalizedFileName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (exactMatches.Count > 0)
+        {
+          _logger.LogInformation("Found exact match for file {FileName}: {FileId}",
+              fileName, exactMatches.First().Id);
+          return Task.FromResult<Files.Models.FileModel?>(exactMatches.First());
+        }
+
+        // If no exact match, check for files with the same name but different extension
+        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(normalizedFileName);
+        if (!string.IsNullOrEmpty(fileNameWithoutExtension))
+        {
+          var similarMatches = allActiveFiles
+              .Where(f => f.FileName.Contains(fileNameWithoutExtension, StringComparison.OrdinalIgnoreCase))
+              .ToList();
+
+          if (similarMatches.Count > 0)
+          {
+            _logger.LogInformation("Found similar match for file {FileName}: {FileId}",
+                fileName, similarMatches.First().Id);
+            return Task.FromResult<Files.Models.FileModel?>(similarMatches.First());
+          }
+        }
+
+        _logger.LogInformation("No existing file found with name {FileName}", fileName);
+        return Task.FromResult<Files.Models.FileModel?>(null);
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error checking if file {FileName} exists", fileName);
+        return Task.FromResult<Files.Models.FileModel?>(null);
+      }
     }
   }
 }

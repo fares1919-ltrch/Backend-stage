@@ -21,11 +21,13 @@ graph TD
 
 - **User Administration**: Create, read, update, delete (CRUD) user accounts with comprehensive validation
 - **Role Management**: Assign, modify, and enforce role-based permissions throughout the system
+- **Role Change Notifications**: Automatic email notifications when users are promoted or demoted
 - **User Search**: Find users by various criteria including partial matches and filters
 - **Account Status**: Activate, deactivate, suspend, or permanently delete accounts with proper data handling
 - **Audit Logging**: Track user creation, modifications, role changes, and administrative actions
 - **Batch Operations**: Perform actions on multiple users simultaneously with transaction support
 - **Import/Export**: Bulk import users from CSV/Excel files and export user data reports
+- **First User Privileges**: Automatic SuperAdmin role and validation for the first registered user
 
 ## Roles and Permissions
 
@@ -127,7 +129,7 @@ graph TD
   - 403: Insufficient permissions
   - 404: User not found
 
-### Create User
+### Create User (Admin)
 
 - **Endpoint:** `POST /api/users`
 - **Description:** Creates a new user account (administrative function)
@@ -163,6 +165,56 @@ graph TD
   - 401: Unauthorized
   - 403: Insufficient permissions
   - 409: Email or username already exists
+
+### Register User (Public)
+
+- **Endpoint:** `POST /api/auth/register`
+- **Description:** Public registration endpoint for new users
+- **Authentication:** Not required
+- **Request Body:**
+  ```json
+  {
+    "Username": "new_user",
+    "Email": "newuser@example.com",
+    "Password": "Password123!",
+    "Confirmpassword": "Password123!"
+  }
+  ```
+- **Standard Response:** Created user information (requires admin validation)
+  ```json
+  {
+    "user": {
+      "id": "users/3-A",
+      "userName": "new_user",
+      "email": "newuser@example.com",
+      "role": 0,
+      "validated": false
+    },
+    "message": "Your account has been created. Please wait for an administrator to validate your account.",
+    "isFirstUser": false,
+    "isValidated": false
+  }
+  ```
+- **First User Response:** Special response for the first user registration
+  ```json
+  {
+    "user": {
+      "id": "users/1-A",
+      "userName": "admin_user",
+      "email": "admin@example.com",
+      "role": 2,
+      "validated": true
+    },
+    "message": "Your account has been created as a Super Administrator with full system access. You can log in immediately.",
+    "isFirstUser": true,
+    "isValidated": true
+  }
+  ```
+- **Email Notification:** First user receives a welcome email with SuperAdmin information
+- **Status Codes:**
+  - 201: User created successfully
+  - 400: Invalid request data
+  - 409: Email already exists
 
 ### Update User
 
@@ -229,30 +281,32 @@ graph TD
 
 ### Change User Role
 
-- **Endpoint:** `PATCH /api/users/{userId}/role`
-- **Description:** Updates a user's role
+- **Endpoint:** `PUT /api/user/promote/{userId}` and `PUT /api/user/demote/{userId}`
+- **Description:** Updates a user's role with automatic email notification
 - **Authentication:** Required (JWT, SuperAdmin role only)
-- **Request Body:**
-  ```json
-  {
-    "role": 1,
-    "reason": "Promotion to admin duties"
-  }
-  ```
+- **Request Body:** None (role change is determined by the endpoint)
 - **Response:** Updated user role information
   ```json
   {
-    "userId": "users/1-A",
-    "username": "john_doe",
-    "previousRole": 0,
-    "newRole": 1,
-    "changedAt": "2023-06-21T15:45:00Z",
-    "changedBy": "users/superadmin-1"
+    "message": "User promoted to admin",
+    "user": {
+      "id": "users/1-A",
+      "username": "john_doe",
+      "email": "john@example.com",
+      "previousRole": "User",
+      "newRole": "Admin",
+      "notificationSent": true
+    }
   }
   ```
+- **Email Notification:** Automatic email sent to the user with:
+  - Information about their new role
+  - List of new permissions and responsibilities
+  - Instructions for accessing new features
+  - Styled HTML template with role-specific design
 - **Status Codes:**
   - 200: Role updated successfully
-  - 400: Invalid role value
+  - 400: Invalid role value or cannot promote/demote user
   - 401: Unauthorized
   - 403: Insufficient permissions
   - 404: User not found
@@ -436,6 +490,48 @@ graph TD
 - Separate storage for long-term audit retention
 - Filterable audit log viewer for SuperAdmins
 
+### Role Change Notification System
+
+- **Automatic Email Notifications:**
+
+  - Sent immediately when a user's role is changed
+  - HTML-formatted with responsive design
+  - Role-specific styling and content
+  - Detailed explanation of new permissions and responsibilities
+
+- **Notification Types:**
+
+  - **Promotion to Admin:** Email with admin privileges and responsibilities
+  - **Demotion to User:** Email with updated access level information
+  - **First User (SuperAdmin):** Special welcome email with SuperAdmin privileges
+
+- **Email Template Features:**
+
+  - Role-specific color schemes and badges
+  - Comprehensive list of new permissions
+  - Instructions for accessing role-specific features
+  - Security recommendations based on role level
+
+- **Implementation Details:**
+  - Asynchronous email sending to avoid blocking API responses
+  - Graceful error handling if email delivery fails
+  - Notification status tracking in API responses
+  - HTML and plain text alternatives for email clients
+
+### First User Registration
+
+- **Special Handling for First User:**
+
+  - Automatically assigned the SuperAdmin role
+  - Account is automatically validated (no admin approval needed)
+  - Receives a special welcome email with SuperAdmin information
+  - Can immediately log in and access all system features
+
+- **Security Considerations:**
+  - First user detection is atomic and thread-safe
+  - Special welcome email contains security recommendations
+  - System ensures only one user can receive automatic SuperAdmin privileges
+
 ### Performance Optimizations
 
 - Paginated results for large user lists
@@ -443,3 +539,4 @@ graph TD
 - Caching of user data for performance
 - Rate limiting on administrative endpoints
 - Asynchronous processing for batch operations
+- Non-blocking email notifications

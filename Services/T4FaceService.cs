@@ -44,11 +44,16 @@ namespace Backend.Services
             // Set base address for the new client
             _httpClient.BaseAddress = new Uri(_apiUrl);
 
+            // Set timeout to 30 seconds
+            _httpClient.Timeout = TimeSpan.FromSeconds(30);
+
             // Add API key if available
             if (!string.IsNullOrEmpty(_apiKey))
             {
                 _httpClient.DefaultRequestHeaders.Add("x-api-key", _apiKey);
             }
+
+            _logger.LogInformation("T4Face service initialized with API URL: {ApiUrl}", _apiUrl);
         }
 
         private async Task<T> ExecuteWithRetryAsync<T>(Func<Task<T>> apiCall, string apiName, int maxRetries = 3)
@@ -99,18 +104,22 @@ namespace Backend.Services
                 string cleanedBase64Image1 = CleanBase64String(base64Image1);
                 string cleanedBase64Image2 = CleanBase64String(base64Image2);
 
+                // Compress both images to avoid RequestEntityTooLarge error
+                string compressedBase64Image1 = CompressBase64Image(cleanedBase64Image1, 150);
+                string compressedBase64Image2 = CompressBase64Image(cleanedBase64Image2, 150);
+
                 // First, ensure there's a face registered with the same name
                 // Create a unique name based on the image data (first 10 chars of hash)
-                string personName = $"person_{ComputeHash(cleanedBase64Image2).Substring(0, 10)}";
+                string personName = $"person_{ComputeHash(compressedBase64Image2).Substring(0, 10)}";
 
                 // Register the second image as a face to compare against
-                await RegisterFaceInternalAsync(personName, cleanedBase64Image2);
+                await RegisterFaceInternalAsync(personName, compressedBase64Image2);
 
                 // Create verification request data according to API documentation
                 var requestData = new
                 {
                     person_name = personName,  // Use the same name we registered
-                    person_face = cleanedBase64Image1  // Image to verify
+                    person_face = compressedBase64Image1  // Image to verify (compressed)
                 };
 
                 // Serialize request - but truncate the base64 data in logs
@@ -237,12 +246,22 @@ namespace Backend.Services
                 // Clean base64 string (remove data URI prefix if present)
                 string cleanedBase64 = CleanBase64String(base64Image);
 
+                // Compress the image to avoid RequestEntityTooLarge error
+                string compressedBase64 = CompressBase64Image(cleanedBase64, 150); // Use even smaller size limit (150KB)
+
+                // Calculate compression percentage for logging
+                int originalSizeKB = (cleanedBase64.Length * 3) / 4 / 1024;
+                int compressedSizeKB = (compressedBase64.Length * 3) / 4 / 1024;
+                double compressionPercentage = originalSizeKB > 0 ? 100 - ((double)compressedSizeKB / originalSizeKB * 100) : 0;
+
+                _logger.LogInformation($"Image compressed from {originalSizeKB}KB to {compressedSizeKB}KB ({compressionPercentage:F1}% reduction)");
+
                 // Create request data according to documentation
                 var requestData = new
                 {
                     id = 0,  // Let the API assign an ID
                     user_name = userName,
-                    user_image = cleanedBase64
+                    user_image = compressedBase64
                 };
 
                 // Serialize request but log truncated version
@@ -339,7 +358,7 @@ namespace Backend.Services
         /// <summary>
         /// Compresses a base64 image to reduce its size below the API limits
         /// </summary>
-        private string CompressBase64Image(string base64Image, int maxSizeKB = 500)
+        private string CompressBase64Image(string base64Image, int maxSizeKB = 200) // Reduced max size to 200KB
         {
             try
             {
@@ -366,22 +385,31 @@ namespace Backend.Services
                     using (var image = System.Drawing.Image.FromStream(ms))
                     {
                         // Calculate new dimensions to maintain aspect ratio
+                        // Use a more aggressive scaling factor for larger images
                         double ratio = (double)maxSizeKB / currentSizeKB;
+
+                        // Apply more aggressive scaling for larger images
+                        if (currentSizeKB > 1000)
+                        {
+                            ratio = ratio * 0.7; // More aggressive for very large images
+                        }
+
                         ratio = Math.Sqrt(ratio); // Take square root to apply to both dimensions
 
                         int newWidth = (int)(image.Width * ratio);
                         int newHeight = (int)(image.Height * ratio);
 
-                        // Ensure minimum dimensions
-                        newWidth = Math.Max(newWidth, 100);
-                        newHeight = Math.Max(newHeight, 100);
+                        // Ensure minimum dimensions but cap maximum dimensions
+                        newWidth = Math.Max(Math.Min(newWidth, 800), 100);
+                        newHeight = Math.Max(Math.Min(newHeight, 800), 100);
 
                         // Create resized image
                         using (var resized = new System.Drawing.Bitmap(newWidth, newHeight))
                         {
                             using (var graphics = System.Drawing.Graphics.FromImage(resized))
                             {
-                                graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                // Use lower quality interpolation for faster processing and smaller file size
+                                graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
                                 graphics.DrawImage(image, 0, 0, newWidth, newHeight);
                             }
 
@@ -390,8 +418,12 @@ namespace Backend.Services
                             {
                                 // Create encoder parameters for quality
                                 var encoderParams = new System.Drawing.Imaging.EncoderParameters(1);
+
+                                // Use lower quality for larger original images
+                                long quality = currentSizeKB > 500 ? 40L : 60L; // Lower quality (40% or 60%)
+
                                 encoderParams.Param[0] = new System.Drawing.Imaging.EncoderParameter(
-                                    System.Drawing.Imaging.Encoder.Quality, 75L); // 75% quality
+                                    System.Drawing.Imaging.Encoder.Quality, quality);
 
                                 // Get JPEG codec
                                 var jpegCodec = System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders()
@@ -406,6 +438,48 @@ namespace Backend.Services
                                 // Calculate the new size
                                 int newSizeKB = (compressedBase64.Length * 3) / 4 / 1024;
                                 _logger.LogInformation($"Compressed image size: {newSizeKB} KB");
+
+                                // If still too large, try one more time with even more aggressive settings
+                                if (newSizeKB > maxSizeKB)
+                                {
+                                    _logger.LogWarning($"Image still too large ({newSizeKB} KB), applying maximum compression");
+
+                                    // Convert back to bytes for second compression pass
+                                    byte[] firstPassBytes = Convert.FromBase64String(compressedBase64);
+
+                                    using (var ms2 = new System.IO.MemoryStream(firstPassBytes))
+                                    using (var image2 = System.Drawing.Image.FromStream(ms2))
+                                    {
+                                        // More aggressive resize - fixed small dimensions
+                                        int finalWidth = 400;
+                                        int finalHeight = 400;
+
+                                        using (var finalResized = new System.Drawing.Bitmap(finalWidth, finalHeight))
+                                        {
+                                            using (var graphics2 = System.Drawing.Graphics.FromImage(finalResized))
+                                            {
+                                                graphics2.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Low;
+                                                graphics2.DrawImage(image2, 0, 0, finalWidth, finalHeight);
+                                            }
+
+                                            using (var finalMs = new System.IO.MemoryStream())
+                                            {
+                                                // Maximum compression
+                                                var finalEncoderParams = new System.Drawing.Imaging.EncoderParameters(1);
+                                                finalEncoderParams.Param[0] = new System.Drawing.Imaging.EncoderParameter(
+                                                    System.Drawing.Imaging.Encoder.Quality, 30L); // 30% quality
+
+                                                finalResized.Save(finalMs, jpegCodec, finalEncoderParams);
+
+                                                string finalCompressedBase64 = Convert.ToBase64String(finalMs.ToArray());
+                                                int finalSizeKB = (finalCompressedBase64.Length * 3) / 4 / 1024;
+                                                _logger.LogInformation($"Final compressed image size: {finalSizeKB} KB");
+
+                                                return finalCompressedBase64;
+                                            }
+                                        }
+                                    }
+                                }
 
                                 return compressedBase64;
                             }
@@ -498,10 +572,17 @@ namespace Backend.Services
                                 {
                                     PersonId = c.id.ToString(),
                                     FaceId = c.id.ToString(),
+                                    // Parse the similarity value - T4FACE API returns it as a percentage (0-100)
                                     Confidence = double.TryParse(c.similarity, out var confidence) ? confidence : 0,
                                     Name = c.name
                                 })
                                 .ToList();
+
+                            // Log the parsed confidence values for debugging
+                            var confidenceValues = identificationResult.Matches.Take(3)
+                                .Select(m => new { m.Name, m.Confidence })
+                                .ToList();
+                            _logger.LogDebug("Parsed confidence values: {@ConfidenceValues}", confidenceValues);
                         }
                         else
                         {
