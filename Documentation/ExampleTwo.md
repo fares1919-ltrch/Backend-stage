@@ -4,6 +4,68 @@
 
 This document explains the deduplication workflow when processing multiple images, including how duplicates are detected and handled. It includes a detailed example of a successful deduplication process with two images where one image is identified as a potential duplicate of the other.
 
+## Use Case Diagram
+
+```mermaid
+graph TD
+    subgraph Users
+        User[Regular User]
+        Admin[Admin]
+    end
+
+    subgraph Upload Process
+        UploadArchive[Upload tar.gz Archive]
+        ExtractImages[Extract Multiple Images]
+        CreateProcess[Create Process]
+    end
+
+    subgraph Deduplication Process
+        StartProcess[Start Process]
+        RegisterFaces[Register Faces]
+        CompareFaces[Compare Faces]
+        DetectDuplicates[Detect Duplicates]
+    end
+
+    subgraph Results Management
+        ViewDuplicates[View Duplicate Records]
+        ViewExceptions[View Exceptions]
+        ConfirmReject[Confirm/Reject Duplicates]
+    end
+
+    User --> UploadArchive
+    User --> StartProcess
+    User --> ViewDuplicates
+    User --> ViewExceptions
+    User --> ConfirmReject
+
+    Admin --> UploadArchive
+    Admin --> StartProcess
+    Admin --> ViewDuplicates
+    Admin --> ViewExceptions
+    Admin --> ConfirmReject
+
+    UploadArchive --> ExtractImages
+    ExtractImages --> CreateProcess
+    CreateProcess --> StartProcess
+    StartProcess --> RegisterFaces
+    RegisterFaces --> CompareFaces
+    CompareFaces --> DetectDuplicates
+    DetectDuplicates --> ViewDuplicates
+    DetectDuplicates --> ViewExceptions
+
+    classDef user fill:#d1f0ff,stroke:#0066cc
+    classDef admin fill:#ffe6cc,stroke:#ff9900
+    classDef upload fill:#d9f2d9,stroke:#339933
+    classDef dedup fill:#e6ccff,stroke:#9933ff
+    classDef results fill:#ffe6e6,stroke:#cc0000
+
+    class User user
+    class Admin admin
+    class UploadArchive,ExtractImages,CreateProcess upload
+    class StartProcess,RegisterFaces,CompareFaces,DetectDuplicates dedup
+    class ViewDuplicates,ViewExceptions,ConfirmReject results
+```
+
 ## Deduplication Workflow with Multiple Images
 
 When multiple images are processed, the deduplication system:
@@ -12,6 +74,108 @@ When multiple images are processed, the deduplication system:
 2. Compares each face against all previously registered faces
 3. Creates duplicate records and exceptions when matches are found
 4. Updates the status of all files and the process
+
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UploadController
+    participant DeduplicationController
+    participant DeduplicationService
+    participant T4FaceService
+    participant DuplicateRecordService
+    participant ExceptionService
+    participant RavenDB
+
+    User->>UploadController: Upload tar.gz with multiple images
+    UploadController->>UploadController: Extract images
+    UploadController->>RavenDB: Store file records
+    UploadController->>RavenDB: Create process
+    UploadController-->>User: Return process ID
+
+    User->>DeduplicationController: Start process
+    DeduplicationController->>DeduplicationService: Process files
+    DeduplicationService->>RavenDB: Update process status to "In Processing"
+    DeduplicationService->>RavenDB: Load files for process
+
+    loop For each file
+        DeduplicationService->>T4FaceService: Register face with T4FACE
+        T4FaceService-->>DeduplicationService: Return face ID
+
+        DeduplicationService->>T4FaceService: Identify face against all registered faces
+        T4FaceService-->>DeduplicationService: Return matches
+
+        alt Matches found
+            DeduplicationService->>DuplicateRecordService: Create duplicate record
+            DuplicateRecordService->>RavenDB: Store duplicate record
+
+            DeduplicationService->>ExceptionService: Create exception
+            ExceptionService->>RavenDB: Store exception
+        end
+
+        DeduplicationService->>RavenDB: Update file status to "Inserted"
+    end
+
+    DeduplicationService->>RavenDB: Update process status to "Completed"
+    DeduplicationController-->>User: Return process status
+
+    User->>DeduplicationController: Get duplicate records
+    DeduplicationController->>DuplicateRecordService: Get records for process
+    DuplicateRecordService->>RavenDB: Query duplicate records
+    RavenDB-->>DuplicateRecordService: Return records
+    DuplicateRecordService-->>DeduplicationController: Return duplicate records
+    DeduplicationController-->>User: Display duplicate records
+```
+
+## Multi-Image Processing Flow
+
+```mermaid
+flowchart TD
+    A[Upload tar.gz with Multiple Images] --> B[Extract Images]
+    B --> C[Create Process]
+    C --> D[Start Processing]
+
+    D --> E[Load All Files]
+
+    E --> F[Process First Image]
+    F --> G[Register Face 1]
+    G --> H[Identify Face 1]
+    H --> I{Matches Found?}
+    I -->|Yes| J[Create Duplicate Record]
+    I -->|No| K[Mark as Processed]
+    J --> L[Create Exception]
+    L --> K
+
+    K --> M[Process Second Image]
+    M --> N[Register Face 2]
+    N --> O[Identify Face 2]
+    O --> P{Matches Found?}
+    P -->|Yes| Q[Create Duplicate Record]
+    P -->|No| R[Mark as Processed]
+    Q --> S[Create Exception]
+    S --> R
+
+    R --> T[Process Additional Images...]
+
+    T --> U[Update All File Statuses]
+    U --> V[Mark Process as Completed]
+
+    style A fill:#d1f0ff,stroke:#0066cc
+    style B fill:#d1f0ff,stroke:#0066cc
+    style C fill:#d1f0ff,stroke:#0066cc
+    style D fill:#ffe6cc,stroke:#ff9900
+    style E fill:#ffe6cc,stroke:#ff9900
+    style F,M,T fill:#e6ccff,stroke:#9933ff
+    style G,N fill:#d9f2d9,stroke:#339933
+    style H,O fill:#d9f2d9,stroke:#339933
+    style I,P fill:#ffe6cc,stroke:#ff9900
+    style J,Q fill:#ffe6e6,stroke:#cc0000
+    style L,S fill:#ffe6e6,stroke:#cc0000
+    style K,R fill:#d9f2d9,stroke:#339933
+    style U fill:#d9f2d9,stroke:#339933
+    style V fill:#d9f2d9,stroke:#339933
+```
 
 ## API Endpoints
 
@@ -54,11 +218,13 @@ Below is a detailed example of a deduplication process with two images, where on
 ### 1. Upload a tar.gz File with Multiple Images
 
 **Request:**
+
 ```
 POST /api/Uploading/upload
 ```
 
 **Logs:**
+
 ```
 info: upp.Controllers.UploadingController[0]
       Upload request received. HasFile: True, ContentType: multipart/form-data; boundary=--------------------------41334099291428775997827
@@ -97,6 +263,7 @@ info: upp.Controllers.UploadingController[0]
 ```
 
 **What Happened:**
+
 1. The system received a tar.gz file named "LUKA VALVERDI.tar.gz"
 2. It extracted two image files:
    - "38c637bb25e64a2da0837612a781989f.jpg"
@@ -110,11 +277,13 @@ info: upp.Controllers.UploadingController[0]
 ### 2. Start the Deduplication Process
 
 **Request:**
+
 ```
 POST /api/Deduplication/process/409359f2-cfb6-44be-ba92-bf20aaee5a4d
 ```
 
 **Logs:**
+
 ```
 info: Program[0]
       Request: POST /api/Deduplication/process/409359f2-cfb6-44be-ba92-bf20aaee5a4d
@@ -123,9 +292,9 @@ info: Backend.Controllers.DeduplicationController[0]
 info: Backend.Services.DeduplicationService[0]
       Trying to load process with ID format: 409359f2-cfb6-44be-ba92-bf20aaee5a4d in processes database
 info: Backend.Services.DeduplicationService[0]
-      Trying to load process with ID format: processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d in processes database       
+      Trying to load process with ID format: processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d in processes database
 info: Backend.Services.DeduplicationService[0]
-      Successfully found process with ID format: processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d in processes database   
+      Successfully found process with ID format: processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d in processes database
 info: Backend.Services.DeduplicationService[0]
       Process processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d status updated to In Processing
 info: Backend.Services.DeduplicationService[0]
@@ -145,6 +314,7 @@ info: Backend.Services.DeduplicationService[0]
 ```
 
 **What Happened:**
+
 1. The system found the process with ID "processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d"
 2. It updated the process status to "In Processing"
 3. It found both files associated with the process
@@ -152,6 +322,7 @@ info: Backend.Services.DeduplicationService[0]
 ### 3. Process File Insertion
 
 **Logs:**
+
 ```
 info: Backend.Services.DeduplicationService[0]
       Processing file insertion for 38c637bb25e64a2da0837612a781989f.jpg
@@ -160,12 +331,14 @@ info: Backend.Services.DeduplicationService[0]
 ```
 
 **What Happened:**
+
 1. The system began processing both files for insertion
 2. This is the first step in the deduplication process
 
 ### 4. Face Verification and Registration
 
 **Logs:**
+
 ```
 info: Backend.Services.T4FaceService[0]
       Initiating face verification
@@ -198,6 +371,7 @@ info: Backend.Services.T4FaceService[0]
 ```
 
 **What Happened:**
+
 1. The system registered the first face with the T4FACE API
 2. The face was assigned an ID (144) and a name ("person_8a9590d521")
 3. The system then verified the second face against the first face
@@ -206,6 +380,7 @@ info: Backend.Services.T4FaceService[0]
 ### 5. Face Identification for First Image
 
 **Logs:**
+
 ```
 info: Backend.Services.DeduplicationService[0]
       Processing file identification for 38c637bb25e64a2da0837612a781989f.jpg
@@ -240,6 +415,7 @@ warn: Backend.Services.DeduplicationService[0]
 ```
 
 **What Happened:**
+
 1. The system identified the first image against all registered faces
 2. It found a match with a high similarity score (93.24%)
 3. The match was with the face that was just registered ("person_8a9590d521")
@@ -249,6 +425,7 @@ warn: Backend.Services.DeduplicationService[0]
 ### 6. Face Identification for Second Image
 
 **Logs:**
+
 ```
 info: Backend.Services.DeduplicationService[0]
       Processing file identification for 7cbea31ba4967e98afff84d228728e01.jpg
@@ -267,12 +444,14 @@ warn: Backend.Services.T4FaceService[0]
 ```
 
 **What Happened:**
+
 1. The system identified the second image against all registered faces
 2. It found no matches, indicating this is a different person
 
 ### 7. Process Completion
 
 **Logs:**
+
 ```
 info: Backend.Services.DuplicateRecordService[0]
       Looking for duplicate records with ProcessId: processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d or processes/409359f2-cfb6-44be-ba92-bf20aaee5a4d
@@ -289,6 +468,7 @@ info: Backend.Controllers.DeduplicationController[0]
 ```
 
 **What Happened:**
+
 1. The system found 1 duplicate record for the process
 2. It found 1 exception for the process
 3. It updated the process status to "Completed with 2 files processed"

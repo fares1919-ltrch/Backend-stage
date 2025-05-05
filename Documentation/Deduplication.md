@@ -4,6 +4,74 @@
 
 The deduplication feature identifies and manages duplicate faces across uploaded images. It uses the T4FACE API for face recognition and comparison, creating records of potential duplicates for user review and decision-making.
 
+## Use Case Diagram
+
+```mermaid
+graph TD
+    subgraph Users
+        User[Regular User]
+        Admin[Admin]
+    end
+
+    subgraph Process Management
+        UploadFiles[Upload Files]
+        CreateProcess[Create Process]
+        StartProcess[Start Process]
+        PauseProcess[Pause Process]
+        ResumeProcess[Resume Process]
+        ViewProcesses[View Processes]
+        CleanupProcess[Cleanup Process]
+    end
+
+    subgraph Duplicate Management
+        ViewDuplicates[View Duplicates]
+        ConfirmDuplicate[Confirm Duplicate]
+        RejectDuplicate[Reject Duplicate]
+    end
+
+    subgraph Exception Management
+        ViewExceptions[View Exceptions]
+        ResolveException[Resolve Exception]
+    end
+
+    User --> UploadFiles
+    User --> CreateProcess
+    User --> StartProcess
+    User --> PauseProcess
+    User --> ResumeProcess
+    User --> ViewProcesses
+    User --> ViewDuplicates
+    User --> ConfirmDuplicate
+    User --> RejectDuplicate
+    User --> ViewExceptions
+    User --> ResolveException
+
+    Admin --> UploadFiles
+    Admin --> CreateProcess
+    Admin --> StartProcess
+    Admin --> PauseProcess
+    Admin --> ResumeProcess
+    Admin --> ViewProcesses
+    Admin --> CleanupProcess
+    Admin --> ViewDuplicates
+    Admin --> ConfirmDuplicate
+    Admin --> RejectDuplicate
+    Admin --> ViewExceptions
+    Admin --> ResolveException
+
+    classDef user fill:#d1f0ff,stroke:#0066cc
+    classDef admin fill:#ffe6cc,stroke:#ff9900
+    classDef process fill:#d9f2d9,stroke:#339933
+    classDef duplicate fill:#e6ccff,stroke:#9933ff
+    classDef exception fill:#ffe6e6,stroke:#cc0000
+
+    class User user
+    class Admin admin
+    class UploadFiles,CreateProcess,StartProcess,PauseProcess,ResumeProcess,ViewProcesses,CleanupProcess process
+    class ViewDuplicates,ConfirmDuplicate,RejectDuplicate duplicate
+    class ViewExceptions,ResolveException exception
+```
+
 ## Workflow
 
 1. **Upload**: User uploads a tar.gz archive containing images
@@ -17,6 +85,195 @@ The deduplication feature identifies and manages duplicate faces across uploaded
 9. **Process Completion**: Process is marked as completed
 10. **Optional Cleanup**: Files can be cleaned up (deleted) after processing
 
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UploadController
+    participant DeduplicationController
+    participant DeduplicationService
+    participant T4FaceService
+    participant DuplicateRecordService
+    participant ExceptionService
+    participant RavenDB
+
+    User->>UploadController: Upload tar.gz file
+    UploadController->>DeduplicationService: Extract images & create process
+    DeduplicationService->>RavenDB: Store process & files
+    RavenDB-->>User: Return process ID
+
+    User->>DeduplicationController: Start process (processId)
+    DeduplicationController->>DeduplicationService: Process files
+
+    loop For each file
+        DeduplicationService->>T4FaceService: Register face (addface)
+        T4FaceService-->>DeduplicationService: Return Face ID
+        DeduplicationService->>T4FaceService: Identify face (identify_64)
+        T4FaceService-->>DeduplicationService: Return matches
+
+        alt Match found above threshold
+            DeduplicationService->>DuplicateRecordService: Create duplicate record
+            DuplicateRecordService->>RavenDB: Store duplicate record
+            DeduplicationService->>ExceptionService: Create exception
+            ExceptionService->>RavenDB: Store exception
+        end
+
+        DeduplicationService->>RavenDB: Update file status
+    end
+
+    DeduplicationService->>RavenDB: Update process status to Completed
+    RavenDB-->>User: Process completed
+
+    User->>DeduplicationController: Get duplicates (processId)
+    DeduplicationController->>DuplicateRecordService: Get duplicates
+    DuplicateRecordService->>RavenDB: Query duplicates
+    RavenDB-->>User: Return duplicate records
+
+    User->>DeduplicationController: Confirm/Reject duplicate
+    DeduplicationController->>DuplicateRecordService: Update duplicate status
+    DuplicateRecordService->>RavenDB: Store updated status
+
+    opt Cleanup
+        User->>DeduplicationController: Cleanup process
+        DeduplicationController->>DeduplicationService: Delete files
+        DeduplicationService->>RavenDB: Update file statuses to Deleted
+        DeduplicationService->>RavenDB: Update process status to Cleaned
+    end
+```
+
+## State Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> ReadyToStart: Create Process
+
+    ReadyToStart --> InProcessing: Start Process
+
+    InProcessing --> Paused: Pause Process
+    Paused --> InProcessing: Resume Process
+
+    InProcessing --> Error: Error Occurs
+    Error --> InProcessing: Retry
+
+    InProcessing --> ConflictDetected: Conflict Found
+    ConflictDetected --> InProcessing: Resolve Conflict
+
+    InProcessing --> Completed: All Files Processed
+
+    Completed --> Cleaning: Start Cleanup
+    Cleaning --> Cleaned: Cleanup Complete
+
+    Cleaned --> [*]
+
+    state InProcessing {
+        [*] --> Initialization
+        Initialization --> FaceRegistration
+        FaceRegistration --> FaceIdentification
+        FaceIdentification --> DuplicateDetection
+        DuplicateDetection --> ExceptionHandling
+        ExceptionHandling --> [*]
+    }
+```
+
+## Class Diagram
+
+```mermaid
+classDiagram
+    class DeduplicationProcess {
+        +string Id
+        +string Name
+        +string Status
+        +string CurrentStage
+        +DateTime CreatedAt
+        +DateTime? CompletedAt
+        +string Username
+        +List~string~ FileIds
+        +int FileCount
+        +int ProcessedFiles
+        +List~ProcessStep~ Steps
+    }
+
+    class ProcessStep {
+        +string Id
+        +string Name
+        +string ProcessId
+        +DateTime StartDate
+        +DateTime? EndDate
+        +string Status
+        +List~string~ ProcessedFiles
+        +int ErrorCount
+    }
+
+    class FileModel {
+        +string Id
+        +string FileName
+        +string FilePath
+        +string Base64String
+        +string Status
+        +string ProcessStatus
+        +string FaceId
+        +string ProcessId
+    }
+
+    class DuplicatedRecord {
+        +string Id
+        +string ProcessId
+        +string OriginalFileId
+        +string OriginalFileName
+        +DateTime DetectedDate
+        +List~DuplicateMatch~ Duplicates
+        +string Status
+        +string ConfirmationUser
+        +DateTime? ConfirmationDate
+    }
+
+    class DuplicateMatch {
+        +string FileId
+        +string FileName
+        +double Confidence
+        +string PersonId
+    }
+
+    class DeduplicationException {
+        +string Id
+        +string ProcessId
+        +string FileName
+        +List~string~ CandidateFileNames
+        +double ComparisonScore
+        +string Status
+        +DateTime CreatedAt
+        +DateTime? UpdatedAt
+    }
+
+    class DeduplicationService {
+        +StartDeduplicationProcessAsync(string)
+        +StartProcessAsync(DeduplicationProcessDto, string)
+        +GetProcessesAsync()
+        +GetProcessByIdAsync(string)
+        +StartProcessingAsync(string)
+        +PauseProcessAsync(string)
+        +ResumeProcessAsync(string)
+        +CleanupProcessAsync(string)
+    }
+
+    class T4FaceService {
+        +RegisterFaceAsync(string, string)
+        +IdentifyFaceAsync(string)
+        +VerifyFacesAsync(string, string)
+        +DetectFacesAsync(string)
+    }
+
+    DeduplicationProcess "1" *-- "many" ProcessStep
+    DeduplicationProcess "1" *-- "many" FileModel
+    DeduplicationProcess "1" *-- "many" DuplicatedRecord
+    DeduplicationProcess "1" *-- "many" DeduplicationException
+    DuplicatedRecord "1" *-- "many" DuplicateMatch
+
+    DeduplicationService --> DeduplicationProcess : manages
+    DeduplicationService --> T4FaceService : uses
+```
+
 ## API Endpoints
 
 ### Process Management
@@ -24,46 +281,55 @@ The deduplication feature identifies and manages duplicate faces across uploaded
 ```
 POST /api/Deduplication/start
 ```
+
 Creates a new empty deduplication process.
 
 ```
 POST /api/Deduplication/start-process
 ```
+
 Creates a new deduplication process with specific files.
 
 ```
 GET /api/Deduplication/processes
 ```
+
 Gets all deduplication processes.
 
 ```
 GET /api/Deduplication/process/{processId}
 ```
+
 Gets details for a specific process.
 
 ```
 POST /api/Deduplication/process/{processId}
 ```
+
 Starts the deduplication process for the specified process ID.
 
 ```
 GET /api/Deduplication/process/{processId}/files
 ```
+
 Gets all files associated with a specific process.
 
 ```
 POST /api/Deduplication/pause/{processId}
 ```
+
 Pauses a running deduplication process.
 
 ```
 POST /api/Deduplication/resume/{processId}
 ```
+
 Resumes a paused deduplication process.
 
 ```
 POST /api/Deduplication/cleanup/{processId}
 ```
+
 Cleans up (deletes) files associated with a completed process.
 
 ### Duplicate Records
@@ -71,26 +337,31 @@ Cleans up (deletes) files associated with a completed process.
 ```
 GET /api/DuplicateRecord
 ```
+
 Gets all duplicate records.
 
 ```
 GET /api/DuplicateRecord/{id}
 ```
+
 Gets a specific duplicate record by ID.
 
 ```
 GET /api/DuplicateRecord/process/{processId}
 ```
+
 Gets all duplicate records for a specific process.
 
 ```
 POST /api/DuplicateRecord/{id}/confirm
 ```
+
 Confirms a duplicate record.
 
 ```
 POST /api/DuplicateRecord/{id}/reject
 ```
+
 Rejects a duplicate record.
 
 ### Exceptions
@@ -98,21 +369,25 @@ Rejects a duplicate record.
 ```
 GET /api/Exception
 ```
+
 Gets all exceptions.
 
 ```
 GET /api/Exception/{id}
 ```
+
 Gets a specific exception by ID.
 
 ```
 GET /api/Exception/process/{processId}
 ```
+
 Gets all exceptions for a specific process.
 
 ```
 POST /api/Exception/{id}/status
 ```
+
 Updates the status of an exception.
 
 ## Data Models
@@ -270,6 +545,7 @@ The deduplication process uses the T4FACE API for face recognition and compariso
 ```
 POST /personface/addface
 ```
+
 Registers a face from an image file and returns a Face ID.
 
 ### Identification
@@ -277,6 +553,7 @@ Registers a face from an image file and returns a Face ID.
 ```
 POST /personface/identify_64
 ```
+
 Identifies a face against existing faces and returns matches with similarity scores.
 
 ### Verification
@@ -284,6 +561,7 @@ Identifies a face against existing faces and returns matches with similarity sco
 ```
 POST /personface/verify_64
 ```
+
 Verifies if two faces match and returns a similarity score.
 
 ## Similarity Threshold

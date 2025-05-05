@@ -4,11 +4,208 @@
 
 The Exception Handling system tracks and manages issues that occur during the deduplication process. It provides a way to identify, categorize, and resolve problems that arise during image processing, facial recognition, and duplicate detection.
 
+## Use Case Diagram
+
+```mermaid
+graph TD
+    subgraph Users
+        Admin[Administrator]
+        SuperAdmin[Super Administrator]
+    end
+
+    subgraph Exception Management
+        ViewExceptions[View Exceptions]
+        FilterExceptions[Filter Exceptions]
+        ResolveException[Resolve Exception]
+        IgnoreException[Ignore Exception]
+        BatchResolve[Batch Resolve Exceptions]
+        ExportExceptions[Export Exception Reports]
+    end
+
+    subgraph Integration
+        ViewProcessDetails[View Process Details]
+        ViewFileDetails[View File Details]
+        UpdateProcess[Update Process Status]
+        NotifyUsers[Send Notifications]
+    end
+
+    Admin --> ViewExceptions
+    Admin --> FilterExceptions
+    Admin --> ResolveException
+    Admin --> IgnoreException
+    Admin --> ViewProcessDetails
+    Admin --> ViewFileDetails
+
+    SuperAdmin --> ViewExceptions
+    SuperAdmin --> FilterExceptions
+    SuperAdmin --> ResolveException
+    SuperAdmin --> IgnoreException
+    SuperAdmin --> BatchResolve
+    SuperAdmin --> ExportExceptions
+    SuperAdmin --> ViewProcessDetails
+    SuperAdmin --> ViewFileDetails
+    SuperAdmin --> UpdateProcess
+    SuperAdmin --> NotifyUsers
+
+    classDef user fill:#d1f0ff,stroke:#0066cc
+    classDef admin fill:#ffe6cc,stroke:#ff9900
+    classDef exception fill:#d9f2d9,stroke:#339933
+    classDef integration fill:#e6ccff,stroke:#9933ff
+
+    class Admin user
+    class SuperAdmin admin
+    class ViewExceptions,FilterExceptions,ResolveException,IgnoreException,BatchResolve,ExportExceptions exception
+    class ViewProcessDetails,ViewFileDetails,UpdateProcess,NotifyUsers integration
+```
+
 ## Core Components
 
 - **ExceptionService**: Manages the creation, retrieval, and updating of exception records
 - **Exception Model**: Defines the structure of exception records
 - **Exception Controller**: Provides API endpoints for interacting with exceptions
+
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant DeduplicationService
+    participant ExceptionService
+    participant ExceptionController
+    participant Admin
+    participant RavenDB
+    participant NotificationSystem
+
+    DeduplicationService->>ExceptionService: Create Exception (error details)
+    ExceptionService->>RavenDB: Store Exception Record
+    ExceptionService->>NotificationSystem: Send Alert (critical exceptions)
+
+    Admin->>ExceptionController: Get Exceptions by Process
+    ExceptionController->>ExceptionService: Retrieve Exceptions
+    ExceptionService->>RavenDB: Query Exceptions
+    RavenDB-->>ExceptionService: Return Exception Records
+    ExceptionService-->>ExceptionController: Return Exceptions
+    ExceptionController-->>Admin: Display Exceptions
+
+    Admin->>ExceptionController: Update Exception Status
+    ExceptionController->>ExceptionService: Update Status
+    ExceptionService->>RavenDB: Store Updated Exception
+    RavenDB-->>ExceptionService: Confirm Update
+    ExceptionService-->>ExceptionController: Return Updated Exception
+    ExceptionController-->>Admin: Display Confirmation
+
+    alt Batch Operations
+        Admin->>ExceptionController: Batch Resolve Exceptions
+        ExceptionController->>ExceptionService: Update Multiple Exceptions
+
+        loop For each exception
+            ExceptionService->>RavenDB: Update Exception
+        end
+
+        ExceptionService-->>ExceptionController: Return Results
+        ExceptionController-->>Admin: Display Summary
+    end
+```
+
+## State Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: Exception Detected
+
+    Created --> Pending: Initial Status
+
+    Pending --> InProgress: Admin Review
+    Pending --> Ignored: Admin Decision
+
+    InProgress --> Resolved: Issue Fixed
+    InProgress --> Ignored: Not Fixable
+
+    Resolved --> [*]
+    Ignored --> [*]
+
+    state Pending {
+        [*] --> Critical
+        [*] --> High
+        [*] --> Medium
+        [*] --> Low
+    }
+
+    state Resolved {
+        [*] --> Fixed
+        [*] --> Workaround
+        [*] --> AutoResolved
+    }
+```
+
+## Class Diagram
+
+```mermaid
+classDiagram
+    class DeduplicationException {
+        +string Id
+        +string ProcessId
+        +string FileName
+        +List~string~ CandidateFileNames
+        +double ComparisonScore
+        +string Status
+        +DateTime CreatedAt
+        +DateTime? UpdatedAt
+        +Dictionary~string,object~ Metadata
+    }
+
+    class ExceptionController {
+        -ExceptionService _exceptionService
+        -IdNormalizationService _idService
+        -ILogger _logger
+        +GetExceptionsByProcess(string processId)
+        +GetException(string id)
+        +UpdateExceptionStatus(string id, StatusUpdateRequest request)
+        +BatchResolveExceptions(BatchResolveRequest request)
+    }
+
+    class ExceptionService {
+        -RavenDbContext _context
+        -ILogger _logger
+        +CreateExceptionAsync(string processId, string fileName, List~string~ candidateFileNames, double comparisonScore, Dictionary~string,object~ metadata)
+        +GetExceptionAsync(string id)
+        +GetExceptionsByProcessAsync(string processId)
+        +UpdateExceptionStatusAsync(string id, string status, string notes, string resolvedBy)
+        +BatchResolveExceptionsAsync(List~string~ ids, string status, string resolvedBy)
+    }
+
+    class StatusUpdateRequest {
+        +string Status
+        +string Notes
+        +string ResolvedBy
+    }
+
+    class BatchResolveRequest {
+        +List~string~ ExceptionIds
+        +string Status
+        +string Notes
+        +string ResolvedBy
+    }
+
+    class ExceptionDto {
+        +string Id
+        +string ShortId
+        +string ProcessId
+        +string ShortProcessId
+        +string FileName
+        +List~string~ CandidateFileNames
+        +double ComparisonScore
+        +string Status
+        +DateTime CreatedAt
+        +DateTime? UpdatedAt
+        +Dictionary~string,object~ Metadata
+    }
+
+    ExceptionController --> ExceptionService : uses
+    ExceptionService --> DeduplicationException : manages
+    ExceptionController ..> ExceptionDto : returns
+    ExceptionController ..> StatusUpdateRequest : accepts
+    ExceptionController ..> BatchResolveRequest : accepts
+```
 
 ## Technical Implementation
 

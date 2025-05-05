@@ -4,6 +4,54 @@
 
 The conflict management system identifies and handles potential conflicts during file uploads and deduplication processes. It provides a structured way to detect, review, and resolve conflicts to maintain data integrity and prevent duplicate entries.
 
+## Use Case Diagram
+
+```mermaid
+graph TD
+    subgraph Users
+        User[Regular User]
+        Admin[Admin]
+    end
+
+    subgraph Conflict Detection
+        UploadFile[Upload File]
+        BatchUpload[Batch Upload]
+        RunDeduplication[Run Deduplication]
+    end
+
+    subgraph Conflict Management
+        ViewConflicts[View All Conflicts]
+        ViewProcessConflicts[View Process Conflicts]
+        ResolveConflict[Resolve Conflict Manually]
+        AutoResolve[Auto-Resolve Conflicts]
+    end
+
+    User --> UploadFile
+    User --> BatchUpload
+    User --> RunDeduplication
+    User --> ViewConflicts
+    User --> ViewProcessConflicts
+    User --> ResolveConflict
+
+    Admin --> UploadFile
+    Admin --> BatchUpload
+    Admin --> RunDeduplication
+    Admin --> ViewConflicts
+    Admin --> ViewProcessConflicts
+    Admin --> ResolveConflict
+    Admin --> AutoResolve
+
+    classDef user fill:#d1f0ff,stroke:#0066cc
+    classDef admin fill:#ffe6cc,stroke:#ff9900
+    classDef detection fill:#d9f2d9,stroke:#339933
+    classDef management fill:#e6ccff,stroke:#9933ff
+
+    class User user
+    class Admin admin
+    class UploadFile,BatchUpload,RunDeduplication detection
+    class ViewConflicts,ViewProcessConflicts,ResolveConflict,AutoResolve management
+```
+
 ## Features
 
 - **Automatic Conflict Detection** during file uploads and deduplication
@@ -22,7 +70,7 @@ flowchart TD
     D --> E{Face Similarity?}
     E -->|Yes| F[Create Similarity Conflict]
     E -->|No| G[Complete Processing]
-    
+
     H[Batch Upload] --> I{Extract Files}
     I --> J{Filename Exists?}
     J -->|Yes| K[Create Filename Conflict]
@@ -30,6 +78,188 @@ flowchart TD
     L --> M{Face Similarity?}
     M -->|Yes| N[Create Similarity Conflict]
     M -->|No| O[Complete Processing]
+
+    style A fill:#d1f0ff,stroke:#0066cc
+    style B fill:#ffe6cc,stroke:#ff9900
+    style C fill:#ffe6e6,stroke:#cc0000
+    style D fill:#d9f2d9,stroke:#339933
+    style E fill:#ffe6cc,stroke:#ff9900
+    style F fill:#ffe6e6,stroke:#cc0000
+    style G fill:#d9f2d9,stroke:#339933
+    style H fill:#d1f0ff,stroke:#0066cc
+    style I fill:#d9f2d9,stroke:#339933
+    style J fill:#ffe6cc,stroke:#ff9900
+    style K fill:#ffe6e6,stroke:#cc0000
+    style L fill:#d9f2d9,stroke:#339933
+    style M fill:#ffe6cc,stroke:#ff9900
+    style N fill:#ffe6e6,stroke:#cc0000
+    style O fill:#d9f2d9,stroke:#339933
+```
+
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UploadController
+    participant DeduplicationController
+    participant ConflictController
+    participant ConflictService
+    participant T4FaceService
+    participant RavenDB
+
+    alt File Upload Conflict
+        User->>UploadController: Upload file
+        UploadController->>ConflictService: Check for filename conflicts
+        ConflictService->>RavenDB: Query existing files
+        RavenDB-->>ConflictService: Return matching files
+
+        alt Filename Conflict Found
+            ConflictService->>RavenDB: Create conflict record
+            ConflictService-->>UploadController: Return conflict info
+            UploadController-->>User: Return response with conflict warning
+        end
+    end
+
+    alt Deduplication Conflict
+        User->>DeduplicationController: Start deduplication process
+        DeduplicationController->>T4FaceService: Compare faces
+        T4FaceService-->>DeduplicationController: Return similarity scores
+
+        alt Face Similarity Above Threshold
+            DeduplicationController->>ConflictService: Create similarity conflict
+            ConflictService->>RavenDB: Store conflict record
+        end
+
+        DeduplicationController-->>User: Return process status
+    end
+
+    alt Conflict Resolution
+        User->>ConflictController: Get conflicts for process
+        ConflictController->>ConflictService: Retrieve conflicts
+        ConflictService->>RavenDB: Query conflicts
+        RavenDB-->>ConflictService: Return conflict records
+        ConflictService-->>ConflictController: Return conflicts
+        ConflictController-->>User: Display conflicts
+
+        User->>ConflictController: Resolve conflict
+        ConflictController->>ConflictService: Update conflict status
+        ConflictService->>RavenDB: Store updated conflict
+        RavenDB-->>ConflictService: Confirm update
+        ConflictService-->>ConflictController: Return success
+        ConflictController-->>User: Display resolution confirmation
+    end
+
+    alt Auto-Resolution
+        User->>ConflictController: Auto-resolve conflicts
+        ConflictController->>ConflictService: Find high-confidence conflicts
+        ConflictService->>RavenDB: Query unresolved conflicts
+        RavenDB-->>ConflictService: Return conflicts
+
+        loop For each high-confidence conflict
+            ConflictService->>RavenDB: Update conflict status to Resolved
+        end
+
+        ConflictService-->>ConflictController: Return resolution summary
+        ConflictController-->>User: Display auto-resolution results
+    end
+```
+
+## State Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> Undetected
+
+    Undetected --> Detected: Conflict Detection
+
+    Detected --> UnderReview: User Reviews
+
+    UnderReview --> PendingResolution: Decision Made
+
+    PendingResolution --> Resolved: Manual Resolution
+    PendingResolution --> Resolved: Auto Resolution
+
+    Resolved --> [*]
+
+    state Detected {
+        [*] --> FilenameConflict
+        [*] --> FaceSimilarityConflict
+        [*] --> ProcessStatusConflict
+    }
+
+    state Resolved {
+        [*] --> KeepBoth
+        [*] --> KeepOriginal
+        [*] --> KeepNew
+        [*] --> Merge
+        [*] --> Custom
+    }
+```
+
+## Class Diagram
+
+```mermaid
+classDiagram
+    class Conflict {
+        +string Id
+        +string ProcessId
+        +string FileName
+        +string MatchedFileName
+        +double Confidence
+        +string Status
+        +DateTime CreatedAt
+        +string ResolvedBy
+        +DateTime? ResolvedAt
+        +string Resolution
+    }
+
+    class ConflictController {
+        -ConflictService _conflictService
+        -IdNormalizationService _idService
+        -ILogger _logger
+        +GetAllConflicts()
+        +GetConflict(string id)
+        +GetProcessConflicts(string processId)
+        +ResolveConflict(string conflictId, ResolutionRequest request)
+        +AutoResolveConflicts(string processId, double threshold)
+    }
+
+    class ConflictService {
+        -RavenDbContext _context
+        -ILogger _logger
+        +CreateConflictAsync(string processId, string fileName, string matchedFileName, double confidence)
+        +GetConflictAsync(string id)
+        +GetConflictsAsync()
+        +GetProcessConflictsAsync(string processId)
+        +ResolveConflictAsync(string id, string resolution, string resolvedBy)
+        +AutoResolveConflictsAsync(string processId, double threshold)
+    }
+
+    class ResolutionRequest {
+        +string Resolution
+        +string ResolvedBy
+    }
+
+    class ConflictDto {
+        +string Id
+        +string ShortId
+        +string ProcessId
+        +string ShortProcessId
+        +string FileName
+        +string MatchedFileName
+        +double Confidence
+        +string Status
+        +DateTime CreatedAt
+        +string ResolvedBy
+        +DateTime? ResolvedAt
+        +string Resolution
+    }
+
+    ConflictController --> ConflictService : uses
+    ConflictService --> Conflict : manages
+    ConflictController ..> ConflictDto : returns
+    ConflictController ..> ResolutionRequest : accepts
 ```
 
 ## Conflict Types

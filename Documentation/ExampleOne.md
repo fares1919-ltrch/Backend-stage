@@ -16,6 +16,92 @@ The deduplication process consists of several steps:
 6. **Record Creation**: Duplicate records are created for any matches found
 7. **Process Completion**: The process is marked as completed
 
+## Workflow Diagram
+
+```mermaid
+flowchart TD
+    A[Upload tar.gz Archive] --> B[Extract Images]
+    B --> C[Create Process]
+    C --> D[Start Processing]
+
+    D --> E[Load Files]
+    E --> F[Process Each File]
+
+    subgraph "File Processing"
+        F --> G[Register Face with T4FACE]
+        G --> H[Identify Face]
+        H --> I{Matches Found?}
+        I -->|Yes| J[Create Duplicate Records]
+        I -->|No| K[Mark as Processed]
+        J --> L[Create Exceptions if Needed]
+        L --> K
+    end
+
+    K --> M[Update File Status]
+    M --> N{All Files Processed?}
+    N -->|No| F
+    N -->|Yes| O[Mark Process as Completed]
+
+    style A fill:#d1f0ff,stroke:#0066cc
+    style B fill:#d1f0ff,stroke:#0066cc
+    style C fill:#d1f0ff,stroke:#0066cc
+    style D fill:#ffe6cc,stroke:#ff9900
+    style E fill:#ffe6cc,stroke:#ff9900
+    style F fill:#ffe6cc,stroke:#ff9900
+    style G fill:#d9f2d9,stroke:#339933
+    style H fill:#d9f2d9,stroke:#339933
+    style I fill:#e6ccff,stroke:#9933ff
+    style J fill:#e6ccff,stroke:#9933ff
+    style K fill:#d9f2d9,stroke:#339933
+    style L fill:#ffe6e6,stroke:#cc0000
+    style M fill:#d9f2d9,stroke:#339933
+    style N fill:#ffe6cc,stroke:#ff9900
+    style O fill:#d9f2d9,stroke:#339933
+```
+
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant UploadController
+    participant DeduplicationController
+    participant DeduplicationService
+    participant T4FaceService
+    participant DuplicateRecordService
+    participant RavenDB
+
+    Client->>UploadController: Upload tar.gz Archive
+    UploadController->>UploadController: Extract Images
+    UploadController->>RavenDB: Store File Records
+    UploadController->>RavenDB: Create Process
+    UploadController-->>Client: Return Process ID
+
+    Client->>DeduplicationController: Start Process (processId)
+    DeduplicationController->>DeduplicationService: Start Processing
+    DeduplicationService->>RavenDB: Update Process Status to "In Processing"
+    DeduplicationService->>RavenDB: Load Files for Process
+
+    loop For each file
+        DeduplicationService->>T4FaceService: Register Face
+        T4FaceService-->>DeduplicationService: Return Face ID
+        DeduplicationService->>RavenDB: Update File with Face ID
+
+        DeduplicationService->>T4FaceService: Identify Face
+        T4FaceService-->>DeduplicationService: Return Matches
+
+        alt Matches Found
+            DeduplicationService->>DuplicateRecordService: Create Duplicate Record
+            DuplicateRecordService->>RavenDB: Store Duplicate Record
+        end
+
+        DeduplicationService->>RavenDB: Update File Status to "Inserted"
+    end
+
+    DeduplicationService->>RavenDB: Update Process Status to "Completed"
+    DeduplicationController-->>Client: Return Process Status
+```
+
 ## API Endpoints
 
 ### Upload Endpoint
@@ -27,6 +113,7 @@ POST /api/Uploading/upload
 This endpoint accepts a tar.gz file containing images and creates a deduplication process.
 
 **Example Response:**
+
 ```json
 {
   "success": true,
@@ -45,6 +132,7 @@ POST /api/Deduplication/process/{processId}
 This endpoint starts the deduplication process for the specified process ID.
 
 **Example Response:**
+
 ```json
 {
   "success": true,
@@ -81,11 +169,13 @@ Below is a detailed example of a successful deduplication process, including the
 ### 1. Upload a tar.gz File
 
 **Request:**
+
 ```
 POST /api/Uploading/upload
 ```
 
 **Logs:**
+
 ```
 info: upp.Controllers.UploadingController[0]
       Upload request received. HasFile: True, ContentType: multipart/form-data; boundary=--------------------------386025727986969430020260
@@ -114,6 +204,7 @@ info: upp.Controllers.UploadingController[0]
 ```
 
 **What Happened:**
+
 1. The system received a tar.gz file named "luka.tar.gz"
 2. It extracted one image file: "38c637bb25e64a2da0837612a781989f.jpg"
 3. It created a file record with ID "files/ed69a72b-c974-41be-ae74-4f415b42a34a"
@@ -123,11 +214,13 @@ info: upp.Controllers.UploadingController[0]
 ### 2. Start the Deduplication Process
 
 **Request:**
+
 ```
 POST /api/Deduplication/process/56d89cee-e95a-435f-8a49-ee9b904b956b
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -150,6 +243,7 @@ POST /api/Deduplication/process/56d89cee-e95a-435f-8a49-ee9b904b956b
 ```
 
 **Logs:**
+
 ```
 info: Program[0]
       Request: POST /api/Deduplication/process/56d89cee-e95a-435f-8a49-ee9b904b956b
@@ -158,23 +252,23 @@ info: Backend.Controllers.DeduplicationController[0]
 info: Backend.Services.DeduplicationService[0]
       Trying to load process with ID format: 56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database       
+      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database   
+      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
       Trying to load process with ID format: 56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database       
+      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database   
+      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
       Process processes/56d89cee-e95a-435f-8a49-ee9b904b956b status updated to In Processing
 info: Backend.Services.DeduplicationService[0]
       Trying to load process with ID format: 56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database       
+      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database   
+      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
       Successfully found process 56d89cee-e95a-435f-8a49-ee9b904b956b with ID format processes/56d89cee-e95a-435f-8a49-ee9b904b956b
 info: Backend.Services.DeduplicationService[0]
@@ -218,12 +312,13 @@ info: Backend.Controllers.DeduplicationController[0]
 info: Backend.Services.DeduplicationService[0]
       Trying to load process with ID format: 56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database       
+      Trying to load process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 info: Backend.Services.DeduplicationService[0]
-      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database   
+      Successfully found process with ID format: processes/56d89cee-e95a-435f-8a49-ee9b904b956b in processes database
 ```
 
 **What Happened:**
+
 1. The system found the process with ID "processes/56d89cee-e95a-435f-8a49-ee9b904b956b"
 2. It updated the process status to "In Processing"
 3. It found the file associated with the process
@@ -256,6 +351,7 @@ GET /api/Uploading/file/{fileId}
 Replace `{fileId}` with the file ID from the upload logs (e.g., "files/ed69a72b-c974-41be-ae74-4f415b42a34a").
 
 If the process worked correctly, the file should have:
+
 - A status of "Inserted"
 - A FaceId assigned (not null)
 
@@ -270,6 +366,7 @@ GET /api/Deduplication/process/{processId}
 Replace `{processId}` with the process ID from the upload logs (e.g., "56d89cee-e95a-435f-8a49-ee9b904b956b").
 
 This should show more accurate information than the response from the POST endpoint, including:
+
 - All steps (Initialization, Insertion, Identification)
 - Correct count of processed files
 

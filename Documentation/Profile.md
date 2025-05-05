@@ -4,6 +4,65 @@
 
 The Profile Management system allows users to view and update their personal information, profile pictures, and account settings. It provides a comprehensive interface for managing user identity and preferences within the application.
 
+## Use Case Diagram
+
+```mermaid
+graph TD
+    subgraph Users
+        RegularUser[Regular User]
+        Admin[Administrator]
+    end
+
+    subgraph Profile Management
+        ViewProfile[View Profile]
+        UpdateProfile[Update Profile Information]
+        ChangePassword[Change Password]
+        ViewActivity[View Activity History]
+    end
+
+    subgraph Profile Picture
+        UploadPicture[Upload Profile Picture]
+        ViewPicture[View Profile Picture]
+        DeletePicture[Delete Profile Picture]
+    end
+
+    subgraph Data Management
+        ExportData[Export User Data]
+        DeleteAccount[Delete Account]
+    end
+
+    RegularUser --> ViewProfile
+    RegularUser --> UpdateProfile
+    RegularUser --> ChangePassword
+    RegularUser --> ViewActivity
+    RegularUser --> UploadPicture
+    RegularUser --> ViewPicture
+    RegularUser --> DeletePicture
+    RegularUser --> ExportData
+    RegularUser --> DeleteAccount
+
+    Admin --> ViewProfile
+    Admin --> UpdateProfile
+    Admin --> ChangePassword
+    Admin --> ViewActivity
+    Admin --> UploadPicture
+    Admin --> ViewPicture
+    Admin --> DeletePicture
+    Admin --> ExportData
+
+    classDef user fill:#d1f0ff,stroke:#0066cc
+    classDef admin fill:#ffe6cc,stroke:#ff9900
+    classDef profile fill:#d9f2d9,stroke:#339933
+    classDef picture fill:#e6ccff,stroke:#9933ff
+    classDef data fill:#ffe6e6,stroke:#cc0000
+
+    class RegularUser user
+    class Admin admin
+    class ViewProfile,UpdateProfile,ChangePassword,ViewActivity profile
+    class UploadPicture,ViewPicture,DeletePicture picture
+    class ExportData,DeleteAccount data
+```
+
 ## Features
 
 - **Profile Information Management**: Update personal details including contact info and demographics
@@ -22,6 +81,144 @@ graph TD
     C --> E[RavenDB]
     A --> F[JwtTokenService]
     F --> G[Authentication Validation]
+
+    style A fill:#d1f0ff,stroke:#0066cc
+    style B fill:#d9f2d9,stroke:#339933
+    style C fill:#d9f2d9,stroke:#339933
+    style D fill:#e6ccff,stroke:#9933ff
+    style E fill:#e6ccff,stroke:#9933ff
+    style F fill:#ffe6cc,stroke:#ff9900
+    style G fill:#ffe6cc,stroke:#ff9900
+```
+
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant ProfileController
+    participant UserService
+    participant ProfileImageService
+    participant JwtTokenService
+    participant FileSystem
+    participant RavenDB
+
+    User->>ProfileController: Get Profile
+    ProfileController->>JwtTokenService: Validate Token
+    JwtTokenService-->>ProfileController: User Identity
+    ProfileController->>UserService: Get User Profile
+    UserService->>RavenDB: Query User Document
+    RavenDB-->>UserService: User Data
+    UserService-->>ProfileController: User Profile
+    ProfileController-->>User: Profile Information
+
+    User->>ProfileController: Update Profile
+    ProfileController->>JwtTokenService: Validate Token
+    JwtTokenService-->>ProfileController: User Identity
+    ProfileController->>UserService: Update User Profile
+    UserService->>RavenDB: Store Updated Profile
+    RavenDB-->>UserService: Confirmation
+    UserService-->>ProfileController: Updated Profile
+    ProfileController-->>User: Success Response
+
+    User->>ProfileController: Upload Profile Picture
+    ProfileController->>JwtTokenService: Validate Token
+    JwtTokenService-->>ProfileController: User Identity
+    ProfileController->>ProfileImageService: Process Image
+    ProfileImageService->>ProfileImageService: Resize & Crop Image
+    ProfileImageService->>FileSystem: Store Image File
+    ProfileImageService->>UserService: Update Profile Picture Path
+    UserService->>RavenDB: Update User Document
+    RavenDB-->>UserService: Confirmation
+    UserService-->>ProfileController: Updated Profile
+    ProfileController-->>User: Success with Image URL
+```
+
+## Class Diagram
+
+```mermaid
+classDiagram
+    class ProfileController {
+        -UserService _userService
+        -ProfileImageService _profileImageService
+        -JwtTokenService _jwtTokenService
+        -ILogger _logger
+        +GetProfile()
+        +UpdateProfile(UpdateProfileDTO)
+        +UploadProfilePicture(IFormFile)
+        +GetProfilePicture()
+        +DeleteProfilePicture()
+        +UpdatePassword(PasswordUpdateRequest)
+        +GetActivityHistory()
+        +ExportUserData()
+    }
+
+    class UserService {
+        -RavenDbContext _dbContext
+        -ILogger _logger
+        +GetUserProfileAsync(string userId)
+        +UpdateUserProfileAsync(string userId, UpdateProfileDTO profile)
+        +UpdateProfilePicturePathAsync(string userId, string picturePath)
+        +UpdatePasswordAsync(string userId, string currentPassword, string newPassword)
+        +GetUserActivityHistoryAsync(string userId)
+        +ExportUserDataAsync(string userId)
+    }
+
+    class ProfileImageService {
+        -string _profileImagesPath
+        -ILogger _logger
+        +ProcessAndSaveImageAsync(IFormFile image, string userId)
+        +GetProfileImagePathAsync(string userId)
+        +DeleteProfileImageAsync(string userId)
+        -ResizeImageAsync(Image image)
+        -CropImageAsync(Image image)
+        -DetectFaceAsync(Image image)
+    }
+
+    class JwtTokenService {
+        -byte[] _keyBytes
+        -IConfiguration _configuration
+        +ValidateToken(string token)
+        +GetUserIdFromToken(string token)
+    }
+
+    class UserModel {
+        +string id
+        +string userName
+        +string email
+        +string password
+        +UserRole Role
+        +bool validated
+        +string? PhoneNumber
+        +string? Address
+        +string? City
+        +string? Country
+        +DateTime? DateOfBirth
+        +string? ProfilePicture
+    }
+
+    class UpdateProfileDTO {
+        +string? UserName
+        +string? Email
+        +string? PhoneNumber
+        +string? Address
+        +string? City
+        +string? Country
+        +DateTime? DateOfBirth
+    }
+
+    class PasswordUpdateRequest {
+        +string CurrentPassword
+        +string NewPassword
+        +string ConfirmPassword
+    }
+
+    ProfileController --> UserService : uses
+    ProfileController --> ProfileImageService : uses
+    ProfileController --> JwtTokenService : uses
+    UserService --> UserModel : manages
+    UserService ..> UpdateProfileDTO : accepts
+    ProfileController ..> PasswordUpdateRequest : accepts
 ```
 
 ## API Endpoints

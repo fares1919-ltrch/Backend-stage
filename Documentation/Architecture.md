@@ -6,54 +6,173 @@ This document provides a technical overview of the system architecture, focusing
 
 The system follows a layered architecture with clear separation of concerns:
 
+```mermaid
+flowchart TD
+    subgraph "Presentation Layer"
+        A1[Angular UI]
+        A2[Swagger UI]
+        A3[API Docs]
+    end
+
+    subgraph "API Layer"
+        B1[Auth Controller]
+        B2[User Controller]
+        B3[Upload Controller]
+        B4[Deduplication Controller]
+        B5[Exception Controller]
+        B6[Duplicate Record Controller]
+    end
+
+    subgraph "Business Logic Layer"
+        C1[Deduplication Service]
+        C2[Upload Service]
+        C3[T4Face Service]
+        C4[Exception Service]
+        C5[User Service]
+        C6[Duplicate Record Service]
+        C7[Conflict Service]
+    end
+
+    subgraph "Data Access Layer"
+        D1[RavenDbContext]
+        D2[Models]
+        D3[DTOs]
+    end
+
+    subgraph "External Services"
+        E1[RavenDB]
+        E2[T4FACE API]
+        E3[Email Service]
+    end
+
+    A1 --> B1 & B2 & B3 & B4 & B5 & B6
+    A2 --> B1 & B2 & B3 & B4 & B5 & B6
+
+    B1 --> C5
+    B2 --> C5
+    B3 --> C2
+    B4 --> C1
+    B5 --> C4
+    B6 --> C6
+
+    C1 --> C3
+    C1 --> C4
+    C1 --> C6
+    C1 --> C7
+    C1 --> D1
+
+    C2 --> D1
+    C3 --> E2
+    C4 --> D1
+    C5 --> D1
+    C5 --> E3
+    C6 --> D1
+    C7 --> D1
+
+    D1 --> D2
+    D1 --> E1
+
+    classDef presentation fill:#d1f0ff,stroke:#0066cc
+    classDef api fill:#ffe6cc,stroke:#ff9900
+    classDef business fill:#d9f2d9,stroke:#339933
+    classDef data fill:#e6ccff,stroke:#9933ff
+    classDef external fill:#ffe6e6,stroke:#cc0000
+
+    class A1,A2,A3 presentation
+    class B1,B2,B3,B4,B5,B6 api
+    class C1,C2,C3,C4,C5,C6,C7 business
+    class D1,D2,D3 data
+    class E1,E2,E3 external
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Presentation Layer                     │
-│                                                             │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
-│  │    Angular UI   │  │  Swagger UI     │  │   API Docs  │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────┘  │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         API Layer                           │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                     Controllers                      │    │
-│  │                                                      │    │
-│  │  Auth  User  Upload  Deduplication  Exception  etc.  │    │
-│  └─────────────────────────────────────────────────────┘    │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Business Logic Layer                   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                       Services                       │    │
-│  │                                                      │    │
-│  │  Deduplication  Upload  T4Face  Exception  etc.      │    │
-│  └─────────────────────────────────────────────────────┘    │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────┐
-│                        Data Access Layer                    │
-│                                                             │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
-│  │  RavenDbContext │  │  Models         │  │    DTOs     │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────┘  │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      External Services                      │
-│                                                             │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
-│  │    RavenDB      │  │    T4FACE API   │  │  Email Svc  │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+
+## Component Diagram
+
+```mermaid
+classDiagram
+    class RavenDbContext {
+        +OpenSession(DatabaseType)
+        +OpenAsyncSession(DatabaseType)
+        +GetDatabase(DatabaseType)
+    }
+
+    class DeduplicationService {
+        -RavenDbContext _context
+        -T4FaceService _t4FaceService
+        -DuplicateRecordService _duplicateRecordService
+        -ExceptionService _exceptionService
+        +StartProcessAsync(string)
+        +GetProcessByIdAsync(string)
+        +PauseProcessAsync(string)
+        +ResumeProcessAsync(string)
+        +CleanupProcessAsync(string)
+    }
+
+    class T4FaceService {
+        -HttpClient _httpClient
+        -string _apiUrl
+        -string _apiKey
+        +RegisterFaceAsync(string, string)
+        +IdentifyFaceAsync(string)
+        +VerifyFacesAsync(string, string)
+    }
+
+    class UploadService {
+        -RavenDbContext _context
+        -DeduplicationService _deduplicationService
+        -ConflictService _conflictService
+        +ProcessArchive(IFormFile)
+        -ValidateArchive(Stream)
+        -ExtractImages(Stream, string)
+    }
+
+    class DuplicateRecordService {
+        -RavenDbContext _context
+        +CreateDuplicateRecordAsync(string, string, string, List~DuplicateMatch~)
+        +GetDuplicateRecordAsync(string)
+        +GetDuplicateRecordsByProcessAsync(string)
+        +ConfirmDuplicateAsync(string, string)
+        +RejectDuplicateAsync(string, string)
+    }
+
+    class ExceptionService {
+        -RavenDbContext _context
+        +CreateExceptionAsync(string, string, List~string~, double)
+        +GetExceptionAsync(string)
+        +GetExceptionsByProcessAsync(string)
+        +UpdateExceptionStatusAsync(string, string, string)
+    }
+
+    class UserService {
+        -RavenDbContext _context
+        -JwtTokenService _jwtService
+        +CreateUserAsync(RegisterUserDTO)
+        +ValidateCredentialsAsync(string, string)
+        +GetUserByIdAsync(string)
+        +UpdateUserRoleAsync(string, UserRole)
+    }
+
+    class ConflictService {
+        -RavenDbContext _context
+        +CreateConflictAsync(string, string, string, double)
+        +GetConflictAsync(string)
+        +GetConflictsAsync()
+        +ResolveConflictAsync(string, string, string)
+    }
+
+    DeduplicationService --> RavenDbContext : uses
+    DeduplicationService --> T4FaceService : uses
+    DeduplicationService --> DuplicateRecordService : uses
+    DeduplicationService --> ExceptionService : uses
+    DeduplicationService --> ConflictService : uses
+
+    UploadService --> RavenDbContext : uses
+    UploadService --> DeduplicationService : uses
+    UploadService --> ConflictService : uses
+
+    DuplicateRecordService --> RavenDbContext : uses
+    ExceptionService --> RavenDbContext : uses
+    UserService --> RavenDbContext : uses
+    ConflictService --> RavenDbContext : uses
 ```
 
 ## Core Components
@@ -61,12 +180,14 @@ The system follows a layered architecture with clear separation of concerns:
 ### Controllers
 
 Controllers handle HTTP requests and delegate business logic to services. They are responsible for:
+
 - Request validation
 - Authentication and authorization
 - Response formatting
 - Error handling
 
 Key controllers:
+
 - `AuthController`: Handles user authentication and token management
 - `DeduplicationController`: Manages deduplication processes
 - `DuplicateRecordController`: Handles duplicate record operations
@@ -79,35 +200,42 @@ Key controllers:
 Services implement the core business logic of the application:
 
 - `DeduplicationService`: Orchestrates the deduplication process
+
   - Creates and manages deduplication processes
   - Handles file processing and face detection
   - Integrates with T4FACE API for face recognition
   - Manages process status and lifecycle
 
 - `T4FaceService`: Integrates with the T4FACE API
+
   - Registers faces from images
   - Identifies faces against existing database
   - Verifies face matches
   - Handles API errors and retries
 
 - `DuplicateRecordService`: Manages duplicate records
+
   - Creates records for potential duplicates
   - Handles confirmation/rejection workflow
   - Maintains record status
 
 - `ExceptionService`: Handles exception cases
+
   - Records special cases during processing
   - Provides resolution mechanisms
 
 - `ConflictService`: Manages conflicts
+
   - Detects and records conflicts
   - Provides resolution strategies
 
 - `StatusSynchronizationService`: Ensures data consistency
+
   - Synchronizes file statuses with process statuses
   - Fixes inconsistent data
 
 - `UploadService`: Handles file uploads
+
   - Processes tar.gz archives
   - Extracts and validates images
   - Creates file records
@@ -122,6 +250,7 @@ Services implement the core business logic of the application:
 The application uses RavenDB, a NoSQL document database:
 
 - `RavenDbContext`: Provides database access
+
   - Manages database connections
   - Provides session management
   - Handles database operations
@@ -139,25 +268,30 @@ The application uses RavenDB, a NoSQL document database:
 Core domain models:
 
 - `DeduplicationProcess`: Represents a deduplication process
+
   - Tracks process status and progress
   - Contains references to files
   - Records process steps and history
 
 - `FileModel`: Represents an uploaded file
+
   - Stores file metadata
   - Tracks processing status
   - Contains face recognition data
 
 - `DuplicatedRecord`: Represents a potential duplicate
+
   - Links original and duplicate files
   - Tracks confirmation status
   - Records user decisions
 
 - `DeduplicationException`: Represents special cases
+
   - Records exception details
   - Provides resolution tracking
 
 - `Conflict`: Represents conflicts in processing
+
   - Records conflict details
   - Tracks resolution status
 

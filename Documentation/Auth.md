@@ -12,6 +12,74 @@ The authentication system provides secure user management with JWT token-based a
 - **Password Reset Functionality** with secure email verification
 - **Role-Based Authorization** (User, Admin, SuperAdmin) with permission hierarchies
 
+## Use Case Diagram
+
+```mermaid
+graph TD
+    subgraph Users
+        User[Regular User]
+        Admin[Admin]
+        SuperAdmin[Super Admin]
+    end
+
+    subgraph Authentication
+        Register[Register Account]
+        Login[Login]
+        GoogleLogin[Login with Google]
+        ForgotPassword[Reset Password]
+        RefreshToken[Refresh Token]
+        Logout[Logout]
+    end
+
+    subgraph Authorization
+        AccessOwnProfile[Access Own Profile]
+        AccessUserData[Access User Data]
+        ManageUsers[Manage Users]
+        ManageAdmins[Manage Admins]
+        ConfigureSystem[Configure System]
+    end
+
+    User --> Register
+    User --> Login
+    User --> GoogleLogin
+    User --> ForgotPassword
+    User --> RefreshToken
+    User --> Logout
+    User --> AccessOwnProfile
+
+    Admin --> Login
+    Admin --> GoogleLogin
+    Admin --> ForgotPassword
+    Admin --> RefreshToken
+    Admin --> Logout
+    Admin --> AccessOwnProfile
+    Admin --> AccessUserData
+    Admin --> ManageUsers
+
+    SuperAdmin --> Login
+    SuperAdmin --> GoogleLogin
+    SuperAdmin --> ForgotPassword
+    SuperAdmin --> RefreshToken
+    SuperAdmin --> Logout
+    SuperAdmin --> AccessOwnProfile
+    SuperAdmin --> AccessUserData
+    SuperAdmin --> ManageUsers
+    SuperAdmin --> ManageAdmins
+    SuperAdmin --> ConfigureSystem
+
+    classDef user fill:#d1f0ff,stroke:#0066cc
+    classDef admin fill:#ffe6cc,stroke:#ff9900
+    classDef superadmin fill:#e6ccff,stroke:#9933ff
+    classDef auth fill:#d9f2d9,stroke:#339933
+    classDef authz fill:#ffe6e6,stroke:#cc0000
+
+    class User user
+    class Admin admin
+    class SuperAdmin superadmin
+    class Register,Login,GoogleLogin,ForgotPassword,RefreshToken,Logout auth
+    class AccessOwnProfile,AccessUserData,ManageUsers,ManageAdmins,ConfigureSystem authz
+```
+
 ## Authentication Flow Diagram
 
 ```mermaid
@@ -44,6 +112,123 @@ sequenceDiagram
     AuthController->>JwtTokenService: ValidateToken(token)
     JwtTokenService-->>AuthController: User identity and claims
     AuthController-->>Client: Protected resource
+```
+
+## JWT Token Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant JwtService
+
+    Client->>API: Login Request
+    API->>JwtService: Generate JWT Token
+    JwtService-->>API: Access Token + Refresh Token
+    API-->>Client: Return Tokens (HTTP-only cookies)
+
+    Note over Client,API: Later - Using the token
+
+    Client->>API: Request with Token (in cookie)
+    API->>JwtService: Validate Token
+    JwtService-->>API: Token Valid + User Claims
+    API-->>Client: Protected Resource
+
+    Note over Client,API: When token expires
+
+    Client->>API: Request with Expired Token
+    API->>JwtService: Validate Token
+    JwtService-->>API: Token Expired
+    API-->>Client: 401 Unauthorized
+
+    Client->>API: Refresh Token Request
+    API->>JwtService: Validate Refresh Token
+    JwtService-->>API: New Access Token
+    API-->>Client: Return New Access Token
+```
+
+## Class Diagram
+
+```mermaid
+classDiagram
+    class AuthController {
+        +Register(RegisterUserDTO)
+        +Login(LoginData)
+        +GoogleLogin(GoogleLoginRequest)
+        +ForgotPassword(ForgotPasswordDto)
+        +ResetPassword(ResetPasswordDto)
+        +RefreshToken()
+        +Logout()
+    }
+
+    class UserService {
+        -RavenDbContext _dbContext
+        -JwtTokenService _jwtService
+        -EmailService _emailService
+        +CreateUser(RegisterUserDTO)
+        +ValidateCredentials(string, string)
+        +FindOrCreateGoogleUser(GoogleUserInfo)
+        +ActivateUser(string)
+        +ResetPassword(string, string)
+        +GetUserById(string)
+        +UpdateUserRole(string, UserRole)
+    }
+
+    class JwtTokenService {
+        -byte[] _keyBytes
+        -IConfiguration _configuration
+        +GenerateJwtToken(string)
+        +GenerateJwtTokenWithClaims(string, List~Claim~)
+        +ValidateToken(string)
+        +GenerateRefreshToken()
+        +GetPrincipalFromToken(string)
+    }
+
+    class EmailService {
+        -IConfiguration _configuration
+        -SmtpClient _smtpClient
+        +SendVerificationEmail(string, string)
+        +SendPasswordResetEmail(string, string)
+        +SendRoleChangeNotification(string, UserRole)
+    }
+
+    class UserModel {
+        +string id
+        +string userName
+        +string email
+        +string password
+        +UserRole Role
+        +bool validated
+        +string? ResetToken
+        +DateTime? ResetTokenExpiry
+        +string? PhoneNumber
+        +string? Address
+        +string? City
+        +string? Country
+        +DateTime? DateOfBirth
+        +string? ProfilePicture
+    }
+
+    class UserDTO {
+        +string UserId
+        +string UserName
+        +string Email
+        +bool IsValidated
+        +UserRole Role
+        +string? PhoneNumber
+        +string? Address
+        +string? City
+        +string? Country
+        +DateTime? DateOfBirth
+        +string? ProfilePicture
+    }
+
+    AuthController --> UserService : uses
+    AuthController --> JwtTokenService : uses
+    UserService --> EmailService : uses
+    UserService --> JwtTokenService : uses
+    UserService --> UserModel : manages
+    UserService ..> UserDTO : returns
 ```
 
 ## API Endpoints

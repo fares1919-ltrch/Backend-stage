@@ -4,6 +4,85 @@
 
 The User Management system provides comprehensive tools for administering user accounts, managing roles and permissions, and monitoring user activity within the application. It serves as the central administrative component for managing user access and system permissions.
 
+## Use Case Diagram
+
+```mermaid
+graph TD
+    subgraph Actors
+        RegularUser[Regular User]
+        Admin[Administrator]
+        SuperAdmin[Super Administrator]
+    end
+
+    subgraph Account Management
+        Register[Register Account]
+        Login[Login]
+        UpdateProfile[Update Profile]
+        ChangePassword[Change Password]
+        DeleteAccount[Delete Account]
+    end
+
+    subgraph User Administration
+        ViewUsers[View All Users]
+        CreateUser[Create User]
+        EditUser[Edit User]
+        ActivateDeactivate[Activate/Deactivate User]
+        BulkOperations[Bulk User Operations]
+        ImportExport[Import/Export Users]
+    end
+
+    subgraph Role Management
+        PromoteUser[Promote User]
+        DemoteUser[Demote User]
+        ManagePermissions[Manage Permissions]
+    end
+
+    RegularUser --> Register
+    RegularUser --> Login
+    RegularUser --> UpdateProfile
+    RegularUser --> ChangePassword
+    RegularUser --> DeleteAccount
+
+    Admin --> Register
+    Admin --> Login
+    Admin --> UpdateProfile
+    Admin --> ChangePassword
+    Admin --> ViewUsers
+    Admin --> CreateUser
+    Admin --> EditUser
+    Admin --> ActivateDeactivate
+    Admin --> BulkOperations
+    Admin --> ImportExport
+
+    SuperAdmin --> Register
+    SuperAdmin --> Login
+    SuperAdmin --> UpdateProfile
+    SuperAdmin --> ChangePassword
+    SuperAdmin --> ViewUsers
+    SuperAdmin --> CreateUser
+    SuperAdmin --> EditUser
+    SuperAdmin --> ActivateDeactivate
+    SuperAdmin --> BulkOperations
+    SuperAdmin --> ImportExport
+    SuperAdmin --> PromoteUser
+    SuperAdmin --> DemoteUser
+    SuperAdmin --> ManagePermissions
+
+    classDef user fill:#d1f0ff,stroke:#0066cc
+    classDef admin fill:#ffe6cc,stroke:#ff9900
+    classDef superadmin fill:#e6ccff,stroke:#9933ff
+    classDef account fill:#d9f2d9,stroke:#339933
+    classDef administration fill:#ffe6e6,stroke:#cc0000
+    classDef role fill:#f9f9f9,stroke:#666666
+
+    class RegularUser user
+    class Admin admin
+    class SuperAdmin superadmin
+    class Register,Login,UpdateProfile,ChangePassword,DeleteAccount account
+    class ViewUsers,CreateUser,EditUser,ActivateDeactivate,BulkOperations,ImportExport administration
+    class PromoteUser,DemoteUser,ManagePermissions role
+```
+
 ## System Architecture
 
 ```mermaid
@@ -15,6 +94,138 @@ graph TD
     B --> F[AuditService]
     F --> C
     D --> G[JWT Token Handler]
+
+    style A fill:#d1f0ff,stroke:#0066cc
+    style B fill:#d9f2d9,stroke:#339933
+    style C fill:#e6ccff,stroke:#9933ff
+    style D fill:#ffe6cc,stroke:#ff9900
+    style E fill:#ffe6cc,stroke:#ff9900
+    style F fill:#d9f2d9,stroke:#339933
+    style G fill:#ffe6cc,stroke:#ff9900
+```
+
+## Component Diagram
+
+```mermaid
+classDiagram
+    class UserController {
+        -UserService _userService
+        -JwtTokenService _jwtService
+        -EmailService _emailService
+        -ILogger _logger
+        +GetAllUsers(page, pageSize, search, role, status)
+        +GetUserById(string userId)
+        +CreateUser(CreateUserDTO)
+        +UpdateUser(string userId, UpdateUserDTO)
+        +DeleteUser(string userId, bool hardDelete)
+        +ChangeUserStatus(string userId, StatusUpdateDTO)
+        +BulkOperation(BulkOperationDTO)
+        +ImportUsers(IFormFile file)
+        +ExportUsers(ExportFormat format)
+    }
+
+    class UserService {
+        -RavenDbContext _dbContext
+        -AuditService _auditService
+        -EmailService _emailService
+        -ILogger _logger
+        +GetUsersAsync(UserQueryParameters parameters)
+        +GetUserByIdAsync(string userId)
+        +CreateUserAsync(CreateUserDTO user)
+        +UpdateUserAsync(string userId, UpdateUserDTO user)
+        +DeleteUserAsync(string userId, bool hardDelete)
+        +ChangeUserStatusAsync(string userId, bool isActive, string reason)
+        +PromoteUserAsync(string userId)
+        +DemoteUserAsync(string userId)
+        +BulkOperationAsync(BulkOperationDTO operation)
+        +ImportUsersAsync(Stream fileStream, string contentType)
+        +ExportUsersAsync(ExportFormat format)
+        -ValidateUserData(UserDTO user)
+        -IsFirstUserRegistration()
+    }
+
+    class AuditService {
+        -RavenDbContext _dbContext
+        -ILogger _logger
+        +LogUserActionAsync(string actorId, string action, string resourceId, object before, object after)
+        +GetAuditLogsAsync(AuditLogQueryParameters parameters)
+        +GetUserAuditTrailAsync(string userId)
+    }
+
+    class EmailService {
+        -SmtpClient _smtpClient
+        -IConfiguration _configuration
+        -ILogger _logger
+        +SendRoleChangeNotificationAsync(string email, UserRole oldRole, UserRole newRole)
+        +SendWelcomeEmailAsync(string email, UserRole role, bool isFirstUser)
+        +SendAccountStatusChangeAsync(string email, bool isActive, string reason)
+        -GetEmailTemplate(EmailTemplateType type)
+    }
+
+    class UserModel {
+        +string id
+        +string username
+        +string email
+        +string passwordHash
+        +UserRole role
+        +bool isActive
+        +bool isValidated
+        +UserProfile profile
+        +SecurityInfo security
+        +UserMetadata metadata
+    }
+
+    class UserDTO {
+        +string userId
+        +string username
+        +string email
+        +UserRole role
+        +bool isActive
+        +bool isValidated
+        +string phoneNumber
+        +string address
+        +string city
+        +string country
+        +DateTime? dateOfBirth
+        +DateTime createdAt
+        +DateTime? lastLoginAt
+    }
+
+    UserController --> UserService : uses
+    UserController --> EmailService : uses
+    UserService --> AuditService : uses
+    UserService --> EmailService : uses
+    UserService --> UserModel : manages
+    UserController ..> UserDTO : returns
+```
+
+## Role Change Notification Flow
+
+```mermaid
+sequenceDiagram
+    participant SuperAdmin
+    participant UserController
+    participant UserService
+    participant EmailService
+    participant RavenDB
+    participant User
+
+    SuperAdmin->>UserController: Promote User (userId)
+    UserController->>UserService: PromoteUserAsync(userId)
+    UserService->>RavenDB: Load User
+    RavenDB-->>UserService: User Data
+
+    UserService->>UserService: Validate Role Change
+    UserService->>RavenDB: Update User Role
+    UserService->>AuditService: Log Role Change
+
+    UserService->>EmailService: SendRoleChangeNotificationAsync(email, oldRole, newRole)
+    EmailService->>EmailService: Generate Role-Specific Email
+    EmailService-->>User: Send Promotion Email
+
+    RavenDB-->>UserService: Confirmation
+    UserService-->>UserController: Updated User
+    UserController-->>SuperAdmin: Success Response
 ```
 
 ## Features
