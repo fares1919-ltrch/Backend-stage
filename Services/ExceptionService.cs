@@ -174,5 +174,18 @@ namespace Backend.Services
 
             return statistics;
         }
+
+        public async Task<List<Backend.Models.DeduplicationException>> GetAllExceptionsAsync()
+        {
+            // Explicitly use the exceptions database
+            using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Exceptions);
+
+            // Query for all exceptions
+            var exceptions = await session.Query<Backend.Models.DeduplicationException>()
+                .ToListAsync();
+
+            _logger.LogInformation("Retrieved {Count} exceptions from the database", exceptions.Count);
+            return exceptions;
+        }
     }
 }

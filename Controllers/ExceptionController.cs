@@ -120,6 +120,45 @@ namespace Backend.Controllers
         }
 
         /// <summary>
+        /// Gets all exceptions in the system
+        /// </summary>
+        /// <returns>List of all exceptions</returns>
+        [HttpGet("all")]
+        [ProducesResponseType(typeof(List<ExceptionDto>), 200)]
+        [ProducesResponseType(401)]
+        public async Task<IActionResult> GetAllExceptions()
+        {
+            try
+            {
+                _logger.LogInformation("Getting all exceptions");
+                var exceptions = await _exceptionService.GetAllExceptionsAsync();
+
+                // Convert to DTOs for frontend consumption
+                var exceptionDtos = exceptions.Select(exception => new ExceptionDto
+                {
+                    Id = exception.Id,
+                    ShortId = _idNormalizationService.GetShortId(exception.Id, "exception"),
+                    ProcessId = exception.ProcessId,
+                    ShortProcessId = _idNormalizationService.GetShortId(exception.ProcessId, "process"),
+                    FileName = exception.FileName,
+                    CandidateFileNames = exception.CandidateFileNames,
+                    ComparisonScore = exception.ComparisonScore,
+                    CreatedAt = exception.CreatedAt,
+                    UpdatedAt = exception.UpdatedAt,
+                    Status = exception.Status,
+                    Metadata = exception.Metadata
+                }).ToList();
+
+                return _apiResponseService.Success(exceptionDtos);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving all exceptions");
+                return _apiResponseService.Error("Failed to retrieve exceptions: " + ex.Message);
+            }
+        }
+
+        /// <summary>
         /// Updates the status of an exception
         /// </summary>
         /// <param name="exceptionId">The exception ID</param>
