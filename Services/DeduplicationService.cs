@@ -20,7 +20,6 @@ namespace Backend.Services
   {
     private readonly RavenDbContext _context;
     private readonly IT4FaceService _t4FaceService;
-    private readonly ConflictService _conflictService;
     private readonly ExceptionService _exceptionService;
     private readonly DuplicateRecordService _duplicateRecordService;
     private readonly ILogger<DeduplicationService> _logger;
@@ -30,7 +29,6 @@ namespace Backend.Services
     public DeduplicationService(
         RavenDbContext context,
         IT4FaceService t4FaceService,
-        ConflictService conflictService,
         ExceptionService exceptionService,
         DuplicateRecordService duplicateRecordService,
         ILogger<DeduplicationService> logger,
@@ -38,7 +36,6 @@ namespace Backend.Services
     {
       _context = context ?? throw new ArgumentNullException(nameof(context));
       _t4FaceService = t4FaceService ?? throw new ArgumentNullException(nameof(t4FaceService));
-      _conflictService = conflictService ?? throw new ArgumentNullException(nameof(conflictService));
       _exceptionService = exceptionService ?? throw new ArgumentNullException(nameof(exceptionService));
       _duplicateRecordService = duplicateRecordService ?? throw new ArgumentNullException(nameof(duplicateRecordService));
       _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -50,7 +47,7 @@ namespace Backend.Services
       Directory.CreateDirectory(_tempFilePath);
     }
 
-    public async Task<DeduplicationProcess> StartDeduplicationProcessAsync(string username = null)
+    public async Task<DeduplicationProcess> StartDeduplicationProcessAsync(string? username = null)
     {
       // Use the processes database explicitly
       using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Processes);
@@ -77,7 +74,7 @@ namespace Backend.Services
       return process;
     }
 
-    public async Task<DeduplicationProcess> StartProcessAsync(DeduplicationProcessDto request, string username = null)
+    public async Task<DeduplicationProcess> StartProcessAsync(DeduplicationProcessDto request, string? username = null)
     {
       // Use the processes database explicitly
       using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Processes);
@@ -191,17 +188,6 @@ namespace Backend.Services
       // Get the process using our improved GetProcessAsync method
       var process = await GetProcessAsync(processId);
 
-      // Determine which database the process was found in
-      string? database = null;
-      if (process.Id.StartsWith("processes/"))
-      {
-        database = "processes";
-      }
-      else if (process.Id.StartsWith("DeduplicationProcesses/"))
-      {
-        database = "processes";
-      }
-
       // Initialize steps collection if it doesn't exist
       if (process.Steps == null)
       {
@@ -212,9 +198,9 @@ namespace Backend.Services
       try
       {
         process = await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-          database ?? "processes", // Use the processes database
+          RavenDbContext.DatabaseType.Processes, // Use the processes database
           process.Id, // Use the full document ID including the prefix
-          async (session, loadedProcess) =>
+          (session, loadedProcess) =>
           {
             // Update process status to "In Processing"
             loadedProcess.Status = "In Processing";
@@ -244,7 +230,7 @@ namespace Backend.Services
             }
 
             _logger.LogInformation("Process {ProcessId} status updated to In Processing", loadedProcess.Id);
-            return loadedProcess;
+            return Task.FromResult(loadedProcess);
           },
           5 // Maximum number of retries
         );
@@ -256,24 +242,22 @@ namespace Backend.Services
       }
 
       // Open a session for the rest of the processing
-      using var session = database != null
-        ? _context.OpenAsyncSession(database)
-        : _context.OpenAsyncSession();
+      using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Processes);
 
       try
       {
-        // Create Insertion step
-        var insertionStep = new ProcessStep
+        // Create a single Face Processing step that combines identification, verification, and registration
+        var processingStep = new ProcessStep
         {
           Id = Guid.NewGuid().ToString(),
-          Name = "Insertion",
+          Name = "Face Processing",
           ProcessId = processId,
           StartDate = DateTime.UtcNow,
           Status = "In Progress",
           ProcessedFiles = new List<string>()
         };
 
-        process.Steps.Add(insertionStep);
+        process.Steps.Add(processingStep);
         await session.SaveChangesAsync();
 
         // Get all files from the database for this specific process
@@ -287,19 +271,19 @@ namespace Backend.Services
           try
           {
             await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-              database ?? "processes", // Use the processes database
+              RavenDbContext.DatabaseType.Processes, // Use the processes database
               process.Id, // Use the full document ID including the prefix
-              async (noFilesSession, loadedProcess) =>
+              (noFilesSession, loadedProcess) =>
               {
                 loadedProcess.Status = "Completed";
                 loadedProcess.ProcessEndDate = DateTime.UtcNow;
                 loadedProcess.CompletedAt = DateTime.UtcNow; // Ensure CompletedAt is set
                 loadedProcess.CurrentStage = "Completed";
                 loadedProcess.ProcessedFiles = 0;
-                loadedProcess.CompletionNotes = "Done kamelna.";
+                loadedProcess.CompletionNotes = "No files to process.";
 
                 _logger.LogInformation("Process {ProcessId} status updated to Completed (no files)", loadedProcess.Id);
-                return loadedProcess;
+                return Task.FromResult(loadedProcess);
               },
               5 // Maximum number of retries
             );
@@ -316,64 +300,46 @@ namespace Backend.Services
           return;
         }
 
+        // Process each file using our improved method
+        var processedFileIds = new HashSet<string>();
+        int fileCounter = 0;
+        int totalFiles = files.Count;
+
         foreach (var file in files)
         {
-          await ProcessFileInsertionAsync(file, process, insertionStep, session);
+          fileCounter++;
+          _logger.LogInformation("Processing file {FileCounter} of {TotalFiles}: {FileName} (ID: {FileId})",
+              fileCounter, totalFiles, file.FileName, file.Id);
+
+          var startTime = DateTime.UtcNow;
+          await ProcessFileInsertionAsync(file, process, processingStep, session);
+          var processingTime = DateTime.UtcNow - startTime;
+
+          _logger.LogInformation("Completed processing file {FileCounter} of {TotalFiles}: {FileName} in {ProcessingTime} seconds",
+              fileCounter, totalFiles, file.FileName, processingTime.TotalSeconds);
+
+          processedFileIds.Add(file.Id);
         }
 
-        // Complete the Insertion step
-        insertionStep.Status = "Completed";
-        insertionStep.EndDate = DateTime.UtcNow;
+        _logger.LogInformation("Finished processing all {TotalFiles} files for process {ProcessId}",
+            totalFiles, process.Id);
+
+        // Complete the processing step
+        processingStep.Status = "Completed";
+        processingStep.EndDate = DateTime.UtcNow;
         await session.SaveChangesAsync();
-
-        // Create Identification step
-        var identificationStep = new ProcessStep
-        {
-          Id = Guid.NewGuid().ToString(),
-          Name = "Identification",
-          ProcessId = processId,
-          StartDate = DateTime.UtcNow,
-          Status = "In Progress",
-          ProcessedFiles = new List<string>()
-        };
-
-        process.Steps.Add(identificationStep);
-        await session.SaveChangesAsync();
-
-        // Get all files with status "Inserted"
-        foreach (var file in files.Where(f => f.Status == "Inserted"))
-        {
-          await ProcessFileIdentificationAsync(file, process, identificationStep, session);
-        }
-
-        // Complete the Identification step
-        identificationStep.Status = "Completed";
-        identificationStep.EndDate = DateTime.UtcNow;
 
         // Get counts of duplicate records and exceptions
         var duplicateRecords = await _duplicateRecordService.GetDuplicateRecordsByProcessAsync(process.Id);
         var exceptions = await _exceptionService.GetExceptionsByProcessIdAsync(process.Id);
 
-        // Calculate total processed files
-        var processedFileIds = new HashSet<string>();
-        foreach (var step in process.Steps)
-        {
-          if (step.ProcessedFiles != null)
-          {
-            foreach (var fileId in step.ProcessedFiles)
-            {
-              processedFileIds.Add(fileId);
-            }
-          }
-        }
-
         // Update process status using concurrency control
         try
         {
           await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-            database ?? "processes", // Use the processes database
+            RavenDbContext.DatabaseType.Processes, // Use the processes database
             process.Id, // Use the full document ID including the prefix
-            async (updateSession, loadedProcess) =>
+            (updateSession, loadedProcess) =>
             {
               loadedProcess.Status = "Completed";
               loadedProcess.ProcessEndDate = DateTime.UtcNow;
@@ -391,7 +357,7 @@ namespace Backend.Services
 
               _logger.LogInformation("Process {ProcessId} status updated to Completed with {ProcessedFiles} files processed",
                 loadedProcess.Id, loadedProcess.ProcessedFiles);
-              return loadedProcess;
+              return Task.FromResult(loadedProcess);
             },
             5 // Maximum number of retries
           );
@@ -413,14 +379,15 @@ namespace Backend.Services
         try
         {
           await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-            database ?? "processes", // Use the processes database
+            RavenDbContext.DatabaseType.Processes, // Use the processes database
             process.Id, // Use the full document ID including the prefix
-            async (errorSession, loadedProcess) =>
+            (errorSession, loadedProcess) =>
             {
               loadedProcess.Status = "Error";
+              loadedProcess.CompletionNotes = $"Error during processing: {ex.Message}";
 
               _logger.LogInformation("Process {ProcessId} status updated to Error", loadedProcess.Id);
-              return loadedProcess;
+              return Task.FromResult(loadedProcess);
             },
             5 // Maximum number of retries
           );
@@ -468,7 +435,7 @@ namespace Backend.Services
         // This is more efficient for RavenDB than trying to use a Contains expression
         var result = new List<FileModel>();
 
-        using var filesSession = _context.OpenAsyncSession(database: "Files");
+        using var filesSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files);
         foreach (var fileId in process.FileIds)
         {
           try
@@ -516,7 +483,7 @@ namespace Backend.Services
     {
       // In a real implementation, you would filter files by process ID
       // For this example, we'll simply get all files
-      using var session = _context.OpenAsyncSession(database: "Files");
+      using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files);
 
       // Use the built-in RavenDB async methods
       var query = session.Query<FileModel>()
@@ -529,269 +496,417 @@ namespace Backend.Services
     {
       try
       {
-        _logger.LogInformation("Processing file insertion for {FileName}", file.FileName);
+        _logger.LogInformation("Processing file: {FileName}", file.FileName);
 
-        // Check for conflicts with existing files
-        var existingFiles = await GetFilesForProcessAsync();
-        var conflicts = new List<string>();
+        // STEP 1: Generate a consistent person name for this face
+        // This will be used for both verification and registration if needed
+        string personName = $"person_{ComputeHash(file.Base64String)[..10]}";
+        _logger.LogInformation("Generated person name for face: {PersonName}", personName);
 
-        foreach (var existingFile in existingFiles.Where(f => f.Id != file.Id && f.Status == "Inserted"))
+        // STEP 2: VERIFY - Check if this face already exists in T4Face with this name
+        _logger.LogInformation("STEP 2: Verifying if face already exists with name: {PersonName}", personName);
+
+        var verifyStartTime = DateTime.UtcNow;
+        var (faceExists, compareResult) = await CheckFaceExistsAsync(file.Base64String, personName);
+        var verifyDuration = DateTime.UtcNow - verifyStartTime;
+
+        _logger.LogInformation("Verification completed in {Duration} seconds with result: {Result}",
+            verifyDuration.TotalSeconds, compareResult);
+
+        if (compareResult == "HIT")
         {
-          // Verify faces using T4FaceService
-          var verificationResult = await _t4FaceService.VerifyFacesAsync(file.Base64String, existingFile.Base64String);
+          // Face exists according to verify_64 - identify it to find matches
+          _logger.LogInformation("Verification returned HIT. Face exists in T4Face. Identifying to find matches.");
 
-          if (verificationResult.IsMatch && verificationResult.Confidence > 0.7) // Threshold can be adjusted
+          // STEP 2: IDENTIFY - If verification found a match, identify the face to find all matches
+          _logger.LogInformation("STEP 2: Identifying face against existing faces in T4Face");
+
+          var identifyStartTime = DateTime.UtcNow;
+          var identifyResult = await _t4FaceService.IdentifyFaceAsync(file.Base64String);
+          var identifyDuration = DateTime.UtcNow - identifyStartTime;
+
+          if (identifyResult.Success && identifyResult.HasMatches)
           {
-            // Create conflict record
-            await _conflictService.CreateConflictAsync(
-                process.Id,
-                file.FileName,
-                $"Conflict with {existingFile.FileName}",
-                verificationResult.Confidence);
+            // Filter matches above our threshold (70%)
+            var significantMatches = identifyResult.Matches
+                .Where(m => m.Confidence > 70) // Using 70% threshold consistently
+                .OrderByDescending(m => m.Confidence)
+                .ToList();
 
-            conflicts.Add(existingFile.FileName);
-          }
-        }
-
-        if (conflicts.Count == 0)
-        {
-          // No conflicts found, insert the face into T4Face
-          // Note: In a real implementation, you'd call the actual T4Face API to add the face
-          // For now, we'll simulate by updating the file status
-          using (var fileSession = _context.OpenAsyncSession(database: "Files"))
-          {
-            var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
-            if (dbFile != null)
+            if (significantMatches.Count > 0)
             {
-              dbFile.Status = "Inserted";
-              dbFile.ProcessStatus = "Processing";
-              // In a real implementation, you would store the Face ID returned by T4Face
-              dbFile.FaceId = Guid.NewGuid().ToString();
-              await fileSession.SaveChangesAsync();
+              // We found matches above threshold
+              var bestMatch = significantMatches.First();
+
+              _logger.LogInformation("Found {MatchCount} matches above 70% threshold.",
+                  significantMatches.Count);
+
+              // Update file with the existing face ID from the best match
+              using (var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files))
+              {
+                var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
+                if (dbFile != null)
+                {
+                  dbFile.Status = "Inserted";
+                  dbFile.ProcessStatus = "Processing";
+                  dbFile.FaceId = bestMatch.Name; // Use the existing face ID
+                  await fileSession.SaveChangesAsync();
+                }
+              }
+
+              // Update in-memory file
+              file.Status = "Inserted";
+              file.FaceId = bestMatch.Name;
+
+              _logger.LogInformation("File updated with existing FaceId: {FaceId}", bestMatch.Name);
+
+              // Process matches to create duplicate records
+              await ProcessMatchesAsync(file, process, step, significantMatches);
+              return;
+            }
+            else
+            {
+              _logger.LogWarning("Verification returned HIT but no significant matches found above 70% threshold. Using first match if available.");
+
+              // If we have any matches at all, use the first one even if below threshold
+              if (identifyResult.Matches.Count > 0)
+              {
+                var bestMatch = identifyResult.Matches.OrderByDescending(m => m.Confidence).First();
+
+                // Update file with the existing face ID
+                using (var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files))
+                {
+                  var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
+                  if (dbFile != null)
+                  {
+                    dbFile.Status = "Inserted";
+                    dbFile.ProcessStatus = "Processing";
+                    dbFile.FaceId = bestMatch.Name;
+                    await fileSession.SaveChangesAsync();
+                  }
+                }
+
+                // Update in-memory file
+                file.Status = "Inserted";
+                file.FaceId = bestMatch.Name;
+
+                _logger.LogInformation("File updated with existing FaceId: {FaceId} (confidence: {Confidence}%)",
+                    bestMatch.Name, bestMatch.Confidence);
+
+                // Process matches to create duplicate records
+                await ProcessMatchesAsync(file, process, step, new List<IdentificationMatch> { bestMatch });
+                return;
+              }
+              else
+              {
+                // Inconsistent state - verification says face exists but identification finds no matches
+                _logger.LogWarning("Inconsistent state: Verification says face exists but identification finds no matches. Registering face with name: {PersonName}", personName);
+                await RegisterAndIdentifyFaceAsync(file, process, step, personName);
+              }
             }
           }
-
-          // Add to processed files
-          step.ProcessedFiles.Add(file.Id);
-
-          // Update in-memory file for subsequent operations
-          file.Status = "Inserted";
+          else
+          {
+            // Identification failed but verification succeeded - inconsistent state
+            _logger.LogWarning("Inconsistent state: Verification says face exists but identification failed. Registering face with name: {PersonName}", personName);
+            await RegisterAndIdentifyFaceAsync(file, process, step, personName);
+          }
+        }
+        else if (compareResult == "NO_HIT" || compareResult == "False")
+        {
+          // Face doesn't exist according to verify_64 - register it
+          // Note: "False" is also treated as NO_HIT because that's what the T4Face API returns when verification fails
+          _logger.LogInformation("Verification returned {Result}. Face doesn't exist in T4Face. Registering face with name: {PersonName}", compareResult, personName);
+          await RegisterAndIdentifyFaceAsync(file, process, step, personName);
         }
         else
         {
-          _logger.LogWarning("File {FileName} has conflicts with {ConflictCount} other files", file.FileName, conflicts.Count);
+          // Unexpected verification result - fall back to registration
+          _logger.LogWarning("Unexpected verification result: {Result}. Registering face with name: {PersonName}", compareResult, personName);
+          await RegisterAndIdentifyFaceAsync(file, process, step, personName);
+        }
+
+        // Ensure the file is marked as processed in the step
+        if (!step.ProcessedFiles.Contains(file.Id))
+        {
+          step.ProcessedFiles.Add(file.Id);
         }
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error processing file insertion for {FileName}", file.FileName);
+        _logger.LogError(ex, "Error processing file: {FileName}", file.FileName);
 
         // Create exception record
         await _exceptionService.CreateExceptionAsync(
             process.Id,
             file.FileName,
-            new List<string> { "Error during insertion phase" },
-            0.0);
-      }
-    }
-
-    private async Task ProcessFileIdentificationAsync(FileModel file, DeduplicationProcess process, ProcessStep step, IAsyncDocumentSession session)
-    {
-      try
-      {
-        _logger.LogInformation("Processing file identification for {FileName}", file.FileName);
-
-        // Don't log the base64 string as it's too large
-        _logger.LogDebug("Processing identification for file with size: {Size} bytes",
-            file.Base64String?.Length ?? 0);
-
-        // Identify the face against all others in the database
-        var identificationResult = await _t4FaceService.IdentifyFaceAsync(file.Base64String ?? string.Empty);
-
-        if (identificationResult.Success && identificationResult.HasMatches)
-        {
-          // Use all matches from the API without filtering
-          var matches = identificationResult.Matches.ToList();
-
-          if (matches.Any())
-          {
-            _logger.LogInformation("File {FileName} matched with {MatchCount} candidates",
-                file.FileName, matches.Count);
-
-            // Group matches by person ID to eliminate duplicates
-            var uniqueMatches = matches
-                .GroupBy(m => m.FaceId)
-                .Select(g => g.OrderByDescending(m => m.Confidence).First())
-                .OrderByDescending(m => m.Confidence)
-                .ToList();
-
-            _logger.LogInformation("After deduplication, file {FileName} has {UniqueCount} unique person matches",
-                file.FileName, uniqueMatches.Count);
-
-            // Check if this is a self-match (the file matching with itself)
-            // This happens when the file was just registered with T4FACE and then immediately identified
-            bool isSelfMatch = false;
-
-            // Check for self-matches regardless of how many matches we have
-            // This handles cases where the same face is registered multiple times
-
-            // First, check if all matches have the same person name (indicating potential self-matches)
-            bool allSamePersonName = uniqueMatches.Count > 0 &&
-                uniqueMatches.All(m => !string.IsNullOrEmpty(m.Name) &&
-                                      m.Name == uniqueMatches[0].Name);
-
-            // Also check if all matches have very high confidence (>90%)
-            bool allHighConfidence = uniqueMatches.All(m => m.Confidence > 90);
-
-            if (allSamePersonName && allHighConfidence)
-            {
-              _logger.LogInformation("All matches have the same person name and high confidence. Checking for self-match...");
-
-              // Get the person name from the first match
-              string personName = uniqueMatches[0].Name;
-
-              // Check if the person name contains a hash that might match this file
-              if (!string.IsNullOrEmpty(personName) && personName.StartsWith("person_"))
-              {
-                // Extract the hash part from the person name
-                string personHash = personName.Substring("person_".Length);
-
-                // Compute a hash for this file's base64 string
-                string fileHash = ComputeHash(file.Base64String ?? string.Empty);
-                string truncatedFileHash = fileHash.Length >= personHash.Length ?
-                    fileHash.Substring(0, personHash.Length) : fileHash;
-
-                // If the hashes match or are very similar, it's likely a self-match
-                if (personHash == truncatedFileHash ||
-                    (personHash.Length >= 8 && truncatedFileHash.Length >= 8 &&
-                     personHash.Substring(0, 8) == truncatedFileHash.Substring(0, 8)))
-                {
-                  _logger.LogInformation("File {FileName} matched with itself (hash match). Ignoring self-match. Person name: {PersonName}, Hash: {Hash}",
-                      file.FileName, personName, personHash);
-                  isSelfMatch = true;
-                }
-                else
-                {
-                  _logger.LogInformation("Hash comparison: Person hash: {PersonHash}, File hash: {FileHash}",
-                      personHash, truncatedFileHash);
-                }
-              }
-
-              // Also check if any of the matched IDs correspond to the current file's FaceId
-              if (!isSelfMatch && !string.IsNullOrEmpty(file.FaceId) && file.FaceId != "")
-              {
-                foreach (var match in uniqueMatches)
-                {
-                  if (match.FaceId == file.FaceId)
-                  {
-                    _logger.LogInformation("File {FileName} matched with itself (same FaceId: {FaceId}). Ignoring self-match.",
-                        file.FileName, file.FaceId);
-                    isSelfMatch = true;
-                    break;
-                  }
-                }
-              }
-            }
-
-            // Only proceed with duplicate record creation if this is NOT a self-match
-            if (!isSelfMatch)
-            {
-              // Log only the top 3 matches to avoid huge logs
-              var topMatches = uniqueMatches.Take(3).Select(m => new { m.Name, m.Confidence, m.FaceId }).ToList();
-              _logger.LogDebug("Top unique matches: {@TopMatches}", topMatches);
-
-              // Extract person IDs from the matches
-              var personIds = uniqueMatches.Select(m => m.FaceId).ToList();
-
-              // Try to find the actual files associated with these person IDs
-              var filesForPersons = await GetFilesByPersonIdsAsync(personIds);
-
-              // Create a list of candidate file names that are actual file names, not person IDs
-              var candidateFileNames = new List<string>();
-              foreach (var match in uniqueMatches)
-              {
-                if (filesForPersons.TryGetValue(match.FaceId, out var fileInfo))
-                {
-                  candidateFileNames.Add(fileInfo.FileName);
-                }
-                else
-                {
-                  // If we can't find a file for this person ID, use the person ID as a fallback
-                  candidateFileNames.Add(match.Name);
-                }
-              }
-
-              // Create an exception record with deduplicated data
-              var exception = await _exceptionService.CreateExceptionAsync(
-                  process.Id,
-                  file.FileName,
-                  candidateFileNames,
-                  uniqueMatches.First().Confidence,
-                  new Dictionary<string, object>
-                  {
-                    ["matchDetails"] = uniqueMatches.Select(m => new
-                    {
-                      Name = filesForPersons.TryGetValue(m.FaceId, out var fileInfo) ? fileInfo.FileName : m.Name,
-                      Confidence = m.Confidence,
-                      PersonId = m.FaceId,
-                      FileId = filesForPersons.TryGetValue(m.FaceId, out var fi) ? fi.FileId : string.Empty
-                    }).ToList(),
-                    ["processingDate"] = DateTime.UtcNow
-                  });
-
-              // Create a list of duplicate matches
-              var duplicateMatches = uniqueMatches.Select(m => new DuplicateMatch
-              {
-                FileId = filesForPersons.TryGetValue(m.FaceId, out var fileInfo) ? fileInfo.FileId : string.Empty,
-                FileName = filesForPersons.TryGetValue(m.FaceId, out var fi) ? fi.FileName : m.Name,
-                Confidence = m.Confidence,
-                PersonId = m.FaceId
-              }).ToList();
-
-              // Use the DuplicateRecordService to create a duplicate record with proper prefixes
-              var duplicatedRecord = await _duplicateRecordService.CreateDuplicateRecordAsync(
-                process.Id,
-                file.Id,
-                file.FileName,
-                duplicateMatches
-              );
-
-              _logger.LogInformation("Stored duplicate record in dedicated database: {RecordId}", duplicatedRecord.Id);
-
-              _logger.LogWarning("File {FileName} has {MatchCount} potential duplicates", file.FileName, uniqueMatches.Count);
-            }
-            else
-            {
-              _logger.LogInformation("No matches found for file {FileName}", file.FileName);
-            }
-          }
-          else if (!identificationResult.Success)
-          {
-            _logger.LogWarning("Identification failed for file {FileName}: {ErrorMessage}",
-                file.FileName, identificationResult.ErrorMessage);
-          }
-
-          // Add to processed files
-          step.ProcessedFiles.Add(file.Id);
-        }
-      }
-      catch (Exception ex)
-      {
-        _logger.LogError(ex, "Error processing file identification for {FileName}", file.FileName);
-
-        // Create exception record for the error
-        await _exceptionService.CreateExceptionAsync(
-            process.Id,
-            file.FileName,
-            new List<string> { "Error during identification phase" },
+            new List<string> { "Error during processing" },
             0.0,
             new Dictionary<string, object>
             {
               ["errorMessage"] = ex.Message,
               ["errorType"] = ex.GetType().Name,
               ["processingDate"] = DateTime.UtcNow
-            });
+            }
+        );
+
+        // Update file status to error
+        try
+        {
+          using (var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files))
+          {
+            var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
+            if (dbFile != null)
+            {
+              dbFile.Status = "Error";
+              dbFile.ProcessStatus = $"Error: Processing failed";
+              await fileSession.SaveChangesAsync();
+            }
+          }
+        }
+        catch (Exception updateEx)
+        {
+          _logger.LogError(updateEx, "Error updating file status after processing error: {FileName}", file.FileName);
+        }
       }
+    }
+
+    // Note: The GetReferencePersonNameAsync method has been removed as we now generate
+    // a consistent person name for each face and use it for both verification and registration
+
+    // Helper method to check if a face already exists in T4Face using verify_64
+    private async Task<(bool Exists, string CompareResult)> CheckFaceExistsAsync(string base64Image, string referenceFaceId)
+    {
+      try
+      {
+        if (string.IsNullOrEmpty(referenceFaceId))
+        {
+          _logger.LogWarning("Cannot verify face: referenceFaceId is null or empty");
+          return (false, "NO_HIT");
+        }
+
+        _logger.LogInformation("Verifying face against reference ID: {ReferenceId}", referenceFaceId);
+
+        // Use verify_64 to check if the face exists
+        var verificationResult = await _t4FaceService.VerifyFaceAgainstPersonAsync(
+            base64Image ?? string.Empty,
+            referenceFaceId);
+
+        _logger.LogInformation("Verification result: {CompareResult} with confidence {Confidence}, Success={Success}, Message={Message}",
+            verificationResult.CompareResult, verificationResult.Confidence, verificationResult.Success, verificationResult.Message);
+
+        // Handle different verification results
+        if (verificationResult.CompareResult == "HIT")
+        {
+          // Clear HIT result - face exists in the system
+          return (true, "HIT");
+        }
+        else if (verificationResult.CompareResult == "NO_HIT")
+        {
+          // Clear NO_HIT result - face doesn't exist in the system
+          return (false, "NO_HIT");
+        }
+        else if (!verificationResult.Success && verificationResult.Message.Contains("There is no user with name"))
+        {
+          // Special case: The reference person doesn't exist in T4Face
+          // This is effectively a NO_HIT result
+          _logger.LogInformation("Reference person doesn't exist in T4Face. Treating as NO_HIT.");
+          return (false, "NO_HIT");
+        }
+        else
+        {
+          // Any other result (including "False") - return as is
+          return (false, verificationResult.CompareResult);
+        }
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error checking if face exists in T4Face");
+        return (false, "ERROR");
+      }
+    }
+
+    // Note: The RegisterFirstFaceAsync method has been removed as we now use RegisterAndIdentifyFaceAsync for all cases
+    // This ensures a consistent flow where we always verify first, then register if needed
+
+    // Helper method to process matches and create duplicate records
+    private async Task ProcessMatchesAsync(FileModel file, DeduplicationProcess process, ProcessStep step, List<IdentificationMatch> matches)
+    {
+      _logger.LogInformation("Processing {MatchCount} matches for file: {FileName}", matches.Count, file.FileName);
+
+      // Create duplicate matches list directly from the matches
+      List<DuplicateMatch> duplicateMatches = new List<DuplicateMatch>();
+
+      // Create duplicate matches for all matches from T4Face
+      foreach (var match in matches)
+      {
+        // Create a duplicate match entry for each match
+        duplicateMatches.Add(new DuplicateMatch
+        {
+          FileId = file.Id, // Use the current file ID
+          FileName = file.FileName,
+          Confidence = match.Confidence,
+          PersonId = match.PersonId // Use the person ID from T4Face
+        });
+
+        _logger.LogInformation("Created duplicate match for person: {PersonName} (ID: {PersonId}) with confidence {Confidence}%",
+            match.Name, match.PersonId, match.Confidence);
+      }
+
+      // Create duplicate record in the database
+      if (duplicateMatches.Count > 0)
+      {
+        // Create duplicate record
+        _logger.LogInformation("Creating duplicate record with {MatchCount} matches for person name: {PersonName}",
+            duplicateMatches.Count, file.FaceId);
+
+        var duplicateRecord = await _duplicateRecordService.CreateDuplicateRecordAsync(
+            process.Id,
+            file.Id,
+            file.FileName,
+            duplicateMatches
+        );
+
+        // Update file status to indicate it has duplicates
+        using (var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files))
+        {
+          var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
+          if (dbFile != null)
+          {
+            dbFile.Status = "Duplicate";
+            dbFile.ProcessStatus = "Completed: Found duplicates";
+            await fileSession.SaveChangesAsync();
+          }
+        }
+
+        // Update in-memory file
+        file.Status = "Duplicate";
+
+        _logger.LogInformation("Created duplicate record for file: {FileName} with {MatchCount} matches",
+            file.FileName, duplicateMatches.Count);
+      }
+      else
+      {
+        _logger.LogInformation("No duplicate matches found for file: {FileName}", file.FileName);
+      }
+
+      // Add to processed files
+      if (!step.ProcessedFiles.Contains(file.Id))
+      {
+        step.ProcessedFiles.Add(file.Id);
+      }
+    }
+
+    // Helper method to register a face and then identify it
+    private async Task RegisterAndIdentifyFaceAsync(FileModel file, DeduplicationProcess process, ProcessStep step, string? personName = null)
+    {
+      // Use the provided person name or generate a new one if not provided
+      if (string.IsNullOrEmpty(personName))
+      {
+        personName = $"person_{ComputeHash(file.Base64String)[..10]}";
+      }
+      _logger.LogInformation("Registering face with name: {PersonName}", personName);
+
+      // Register the face
+      var registerResult = await _t4FaceService.RegisterFaceAsync(personName, file.Base64String);
+
+      if (registerResult.Success)
+      {
+        _logger.LogInformation("Successfully registered face with name: {PersonName}", personName);
+
+        // Update file status in database
+        using (var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files))
+        {
+          var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
+          if (dbFile != null)
+          {
+            dbFile.Status = "Inserted";
+            dbFile.ProcessStatus = "Processing";
+            dbFile.FaceId = personName;
+            await fileSession.SaveChangesAsync();
+          }
+        }
+
+        // Update in-memory file
+        file.Status = "Inserted";
+        file.FaceId = personName;
+
+        // Now identify to find potential matches
+        _logger.LogInformation("Identifying newly registered face against existing faces");
+
+        var identifyResult = await _t4FaceService.IdentifyFaceAsync(file.Base64String);
+
+        if (identifyResult.Success && identifyResult.HasMatches)
+        {
+          // Filter matches above threshold and exclude the newly registered face
+          var significantMatches = identifyResult.Matches
+              .Where(m => m.Confidence > 70 && m.Name != personName)
+              .OrderByDescending(m => m.Confidence)
+              .ToList();
+
+          if (significantMatches.Count > 0)
+          {
+            _logger.LogInformation("Found {MatchCount} matches above threshold for newly registered face",
+                significantMatches.Count);
+
+            // Process matches to create duplicate records
+            await ProcessMatchesAsync(file, process, step, significantMatches);
+          }
+          else
+          {
+            _logger.LogInformation("No significant matches found for newly registered face");
+          }
+        }
+        else
+        {
+          _logger.LogInformation("No matches found for newly registered face");
+        }
+      }
+      else
+      {
+        // Handle registration failure
+        _logger.LogError("Failed to register face: {Message}", registerResult.Message);
+
+        // Update file status to error
+        using (var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files))
+        {
+          var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
+          if (dbFile != null)
+          {
+            dbFile.Status = "Error";
+            dbFile.ProcessStatus = "Error: Face registration failed";
+            await fileSession.SaveChangesAsync();
+          }
+        }
+
+        // Create exception record
+        await _exceptionService.CreateExceptionAsync(
+            process.Id,
+            file.FileName,
+            new List<string> { "Error during face registration" },
+            0.0,
+            new Dictionary<string, object>
+            {
+              ["errorMessage"] = registerResult.Message,
+              ["processingDate"] = DateTime.UtcNow
+            }
+        );
+      }
+    }
+
+    // This method is kept for backward compatibility but is no longer used in the new flow
+    // The functionality has been integrated into ProcessFileInsertionAsync
+    private Task ProcessFileIdentificationAsync(FileModel file, DeduplicationProcess process, ProcessStep step, IAsyncDocumentSession session)
+    {
+      _logger.LogWarning("ProcessFileIdentificationAsync is deprecated and should not be called in the new flow");
+
+      // Add the file to processed files to maintain compatibility
+      if (!step.ProcessedFiles.Contains(file.Id))
+      {
+        step.ProcessedFiles.Add(file.Id);
+      }
+
+      return Task.CompletedTask;
     }
 
     // Helper method to get file IDs by file names
@@ -801,7 +916,7 @@ namespace Backend.Services
 
       try
       {
-        using var session = _context.OpenAsyncSession(database: "Files");
+        using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files);
 
         // Instead of a Contains query, fetch all files and filter in memory
         // This is safer for RavenDB compatibility
@@ -830,7 +945,7 @@ namespace Backend.Services
 
       try
       {
-        using var session = _context.OpenAsyncSession(database: "Files");
+        using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files);
 
         // Fetch all files
         var allFiles = await session.Query<FileModel>().ToListAsync();
@@ -878,14 +993,13 @@ namespace Backend.Services
         var process = await GetProcessAsync(processId);
         _logger.LogInformation("Process found for pause: {ProcessId}", process.Id);
 
-        // Always use the processes database
-        string database = "processes";
+        // Always use the processes database for this operation
 
         // Use concurrency control to update the process status
         await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-          database, // Use the processes database
+          RavenDbContext.DatabaseType.Processes, // Use the processes database
           process.Id, // Use the full document ID including the prefix
-          async (session, loadedProcess) =>
+          (session, loadedProcess) =>
           {
             // Only pause if the process is in a state that can be paused
             if (loadedProcess.Status == "In Processing" || loadedProcess.Status == "Started")
@@ -899,7 +1013,7 @@ namespace Backend.Services
               throw new InvalidOperationException($"Cannot pause process in {loadedProcess.Status} state");
             }
 
-            return loadedProcess;
+            return Task.FromResult(loadedProcess);
           },
           5 // Maximum number of retries
         );
@@ -919,16 +1033,15 @@ namespace Backend.Services
         var process = await GetProcessAsync(processId);
         _logger.LogInformation("Process found for resume: {ProcessId}", process.Id);
 
-        // Always use the processes database
-        string database = "processes";
+        // Always use the processes database for this operation
 
         // Use concurrency control to update the process status
         bool canContinueProcessing = false;
 
         await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-          database, // Use the processes database
+          RavenDbContext.DatabaseType.Processes, // Use the processes database
           process.Id, // Use the full document ID including the prefix
-          async (session, loadedProcess) =>
+          (session, loadedProcess) =>
           {
             // Only resume if the process is paused
             if (loadedProcess.Status == "Paused")
@@ -943,7 +1056,7 @@ namespace Backend.Services
               throw new InvalidOperationException($"Cannot resume process in {loadedProcess.Status} state. Process must be in Paused state to resume.");
             }
 
-            return loadedProcess;
+            return Task.FromResult(loadedProcess);
           },
           5 // Maximum number of retries
         );
@@ -961,23 +1074,22 @@ namespace Backend.Services
       }
     }
 
-    public async Task CleanupProcessAsync(string processId, string username = null)
+    public async Task CleanupProcessAsync(string processId, string? username = null)
     {
       // Get the process using our improved GetProcessAsync method
       var process = await GetProcessAsync(processId);
       _logger.LogInformation("Process found for cleanup: {ProcessId}", process.Id);
 
-      // Always use the processes database
-      string database = "processes";
+      // Always use the processes database for this operation
 
       // Use the provided username or fall back to the process username or system
       var cleanupUsername = username ?? process.Username ?? process.CreatedBy ?? "system";
 
       // Use concurrency control to update the process status
       process = await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-        database, // Use the processes database
+        RavenDbContext.DatabaseType.Processes, // Use the processes database
         process.Id, // Use the full document ID including the prefix
-        async (session, loadedProcess) =>
+        (session, loadedProcess) =>
         {
           // Update process status to "Cleaning"
           loadedProcess.Status = "Cleaning";
@@ -986,13 +1098,13 @@ namespace Backend.Services
           loadedProcess.CurrentStage = "Cleaning";
 
           _logger.LogInformation("Process {ProcessId} status updated to Cleaning by {Username}", loadedProcess.Id, cleanupUsername);
-          return loadedProcess;
+          return Task.FromResult(loadedProcess);
         },
         5 // Maximum number of retries
       );
 
       // Open a session for the rest of the processing
-      using var session = _context.OpenAsyncSession(database);
+      using var session = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Processes);
 
       try
       {
@@ -1015,7 +1127,7 @@ namespace Backend.Services
             }
 
             // Update file status
-            using (var fileSession = _context.OpenAsyncSession(database: "Files"))
+            using (var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files))
             {
               var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);
               if (dbFile != null)
@@ -1042,9 +1154,9 @@ namespace Backend.Services
 
         // Update process status to "Cleaned" using concurrency control
         await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-          database, // Use the processes database
+          RavenDbContext.DatabaseType.Processes, // Use the processes database
           process.Id, // Use the full document ID including the prefix
-          async (finalSession, loadedProcess) =>
+          (finalSession, loadedProcess) =>
           {
             loadedProcess.Status = "Cleaned";
             loadedProcess.CurrentStage = "Cleaned";
@@ -1058,7 +1170,7 @@ namespace Backend.Services
 
             _logger.LogInformation("Process {ProcessId} cleanup completed. Success: {SuccessCount}, Errors: {ErrorCount}",
                 loadedProcess.Id, successCount, errorCount);
-            return loadedProcess;
+            return Task.FromResult(loadedProcess);
           },
           5 // Maximum number of retries
         );
@@ -1074,15 +1186,15 @@ namespace Backend.Services
         try
         {
           await _context.ExecuteWithConcurrencyControlAsync<DeduplicationProcess>(
-            database, // Use the processes database
+            RavenDbContext.DatabaseType.Processes, // Use the processes database
             process.Id, // Use the full document ID including the prefix
-            async (errorSession, loadedProcess) =>
+            (errorSession, loadedProcess) =>
             {
               loadedProcess.Status = "Error";
               loadedProcess.CompletionNotes = $"Error during cleanup: {ex.Message}";
 
               _logger.LogInformation("Process {ProcessId} status updated to Error during cleanup", loadedProcess.Id);
-              return loadedProcess;
+              return Task.FromResult(loadedProcess);
             },
             5 // Maximum number of retries
           );
@@ -1100,7 +1212,7 @@ namespace Backend.Services
       }
     }
 
-    // Helper method to compute a hash for a string (similar to the one in T4FaceService)
+    // Helper method to compute a hash for a string (identical to the one in T4FaceService)
     private static string ComputeHash(string input)
     {
       if (string.IsNullOrEmpty(input))
@@ -1108,8 +1220,9 @@ namespace Backend.Services
         return string.Empty;
       }
 
+      using var sha = System.Security.Cryptography.SHA256.Create();
       var bytes = System.Text.Encoding.UTF8.GetBytes(input);
-      var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+      var hash = sha.ComputeHash(bytes);
       return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
     }
 
@@ -1135,7 +1248,7 @@ namespace Backend.Services
         int updatedCount = 0;
 
         // Update file statuses based on process status
-        using var fileSession = _context.OpenAsyncSession(database: "Files");
+        using var fileSession = _context.OpenAsyncSession(RavenDbContext.DatabaseType.Files);
         foreach (var file in files)
         {
           var dbFile = await fileSession.LoadAsync<FileModel>(file.Id);

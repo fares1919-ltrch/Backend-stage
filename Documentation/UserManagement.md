@@ -68,12 +68,7 @@ graph TD
     SuperAdmin --> DemoteUser
     SuperAdmin --> ManagePermissions
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef superadmin fill:#e6ccff,stroke:#9933ff
-    classDef account fill:#d9f2d9,stroke:#339933
-    classDef administration fill:#ffe6e6,stroke:#cc0000
-    classDef role fill:#f9f9f9,stroke:#666666
+
 
     class RegularUser user
     class Admin admin
@@ -95,13 +90,7 @@ graph TD
     F --> C
     D --> G[JWT Token Handler]
 
-    style A fill:#d1f0ff,stroke:#0066cc
-    style B fill:#d9f2d9,stroke:#339933
-    style C fill:#e6ccff,stroke:#9933ff
-    style D fill:#ffe6cc,stroke:#ff9900
-    style E fill:#ffe6cc,stroke:#ff9900
-    style F fill:#d9f2d9,stroke:#339933
-    style G fill:#ffe6cc,stroke:#ff9900
+
 ```
 
 ## Component Diagram

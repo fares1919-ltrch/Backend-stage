@@ -41,10 +41,6 @@ graph TD
     Admin --> ResolveConflict
     Admin --> AutoResolve
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef detection fill:#d9f2d9,stroke:#339933
-    classDef management fill:#e6ccff,stroke:#9933ff
 
     class User user
     class Admin admin
@@ -475,16 +471,16 @@ if (hasConflicts && process.Status != "Conflict Detected")
 When the system detects that a face in an uploaded file is similar to an existing face:
 
 1. During deduplication, the system compares faces with existing faces
-2. If similarity is above a threshold (0.7 by default), a conflict is created
+2. If similarity is above a threshold (70% by default), a conflict is created
 3. The conflict includes the confidence score from the face verification
 
 ```csharp
 foreach (var existingFile in existingFiles.Where(f => f.Id != file.Id && f.Status == "Inserted"))
 {
   // Verify faces using T4FaceService
-  var verificationResult = await _t4FaceService.VerifyFacesAsync(file.Base64String, existingFile.Base64String);
+  var verificationResult = await _t4FaceService.VerifyFaceAgainstPersonAsync(file.Base64String, existingFile.FaceId);
 
-  if (verificationResult.IsMatch && verificationResult.Confidence > 0.7) // Threshold can be adjusted
+  if (verificationResult.IsMatch && verificationResult.Confidence > 70) // Threshold is 70%
   {
     // Create conflict record
     await _conflictService.CreateConflictAsync(

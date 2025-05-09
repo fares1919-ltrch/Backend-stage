@@ -39,10 +39,6 @@ graph TD
     Admin --> ViewExceptions
     Admin --> ResolveConflicts
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef upload fill:#d9f2d9,stroke:#339933
-    classDef integration fill:#e6ccff,stroke:#9933ff
 
     class User user
     class Admin admin
@@ -76,20 +72,7 @@ flowchart TD
 
     K -->|No| N[Return Success Response]
 
-    style A fill:#d1f0ff,stroke:#0066cc
-    style B fill:#ffe6cc,stroke:#ff9900
-    style C fill:#ffe6e6,stroke:#cc0000
-    style D fill:#ffe6e6,stroke:#cc0000
-    style E fill:#d9f2d9,stroke:#339933
-    style F fill:#ffe6cc,stroke:#ff9900
-    style G fill:#ffe6e6,stroke:#cc0000
-    style H fill:#d9f2d9,stroke:#339933
-    style I fill:#d9f2d9,stroke:#339933
-    style J fill:#d9f2d9,stroke:#339933
-    style K fill:#ffe6cc,stroke:#ff9900
-    style L fill:#e6ccff,stroke:#9933ff
-    style M fill:#d9f2d9,stroke:#339933
-    style N fill:#d9f2d9,stroke:#339933
+ Z
 ```
 
 ## Sequence Diagram

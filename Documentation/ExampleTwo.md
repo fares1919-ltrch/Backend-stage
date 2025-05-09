@@ -53,11 +53,7 @@ graph TD
     DetectDuplicates --> ViewDuplicates
     DetectDuplicates --> ViewExceptions
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef upload fill:#d9f2d9,stroke:#339933
-    classDef dedup fill:#e6ccff,stroke:#9933ff
-    classDef results fill:#ffe6e6,stroke:#cc0000
+    cl
 
     class User user
     class Admin admin
@@ -161,20 +157,7 @@ flowchart TD
     T --> U[Update All File Statuses]
     U --> V[Mark Process as Completed]
 
-    style A fill:#d1f0ff,stroke:#0066cc
-    style B fill:#d1f0ff,stroke:#0066cc
-    style C fill:#d1f0ff,stroke:#0066cc
-    style D fill:#ffe6cc,stroke:#ff9900
-    style E fill:#ffe6cc,stroke:#ff9900
-    style F,M,T fill:#e6ccff,stroke:#9933ff
-    style G,N fill:#d9f2d9,stroke:#339933
-    style H,O fill:#d9f2d9,stroke:#339933
-    style I,P fill:#ffe6cc,stroke:#ff9900
-    style J,Q fill:#ffe6e6,stroke:#cc0000
-    style L,S fill:#ffe6e6,stroke:#cc0000
-    style K,R fill:#d9f2d9,stroke:#339933
-    style U fill:#d9f2d9,stroke:#339933
-    style V fill:#d9f2d9,stroke:#339933
+
 ```
 
 ## API Endpoints

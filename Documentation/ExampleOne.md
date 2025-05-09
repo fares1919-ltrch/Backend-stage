@@ -42,21 +42,7 @@ flowchart TD
     N -->|No| F
     N -->|Yes| O[Mark Process as Completed]
 
-    style A fill:#d1f0ff,stroke:#0066cc
-    style B fill:#d1f0ff,stroke:#0066cc
-    style C fill:#d1f0ff,stroke:#0066cc
-    style D fill:#ffe6cc,stroke:#ff9900
-    style E fill:#ffe6cc,stroke:#ff9900
-    style F fill:#ffe6cc,stroke:#ff9900
-    style G fill:#d9f2d9,stroke:#339933
-    style H fill:#d9f2d9,stroke:#339933
-    style I fill:#e6ccff,stroke:#9933ff
-    style J fill:#e6ccff,stroke:#9933ff
-    style K fill:#d9f2d9,stroke:#339933
-    style L fill:#ffe6e6,stroke:#cc0000
-    style M fill:#d9f2d9,stroke:#339933
-    style N fill:#ffe6cc,stroke:#ff9900
-    style O fill:#d9f2d9,stroke:#339933
+
 ```
 
 ## Sequence Diagram

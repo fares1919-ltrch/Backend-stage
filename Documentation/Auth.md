@@ -67,11 +67,7 @@ graph TD
     SuperAdmin --> ManageAdmins
     SuperAdmin --> ConfigureSystem
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef superadmin fill:#e6ccff,stroke:#9933ff
-    classDef auth fill:#d9f2d9,stroke:#339933
-    classDef authz fill:#ffe6e6,stroke:#cc0000
+
 
     class User user
     class Admin admin

@@ -50,11 +50,7 @@ graph TD
     Admin --> DeletePicture
     Admin --> ExportData
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef profile fill:#d9f2d9,stroke:#339933
-    classDef picture fill:#e6ccff,stroke:#9933ff
-    classDef data fill:#ffe6e6,stroke:#cc0000
+
 
     class RegularUser user
     class Admin admin
@@ -82,13 +78,6 @@ graph TD
     A --> F[JwtTokenService]
     F --> G[Authentication Validation]
 
-    style A fill:#d1f0ff,stroke:#0066cc
-    style B fill:#d9f2d9,stroke:#339933
-    style C fill:#d9f2d9,stroke:#339933
-    style D fill:#e6ccff,stroke:#9933ff
-    style E fill:#e6ccff,stroke:#9933ff
-    style F fill:#ffe6cc,stroke:#ff9900
-    style G fill:#ffe6cc,stroke:#ff9900
 ```
 
 ## Sequence Diagram

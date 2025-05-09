@@ -72,12 +72,6 @@ flowchart TD
     D1 --> D2
     D1 --> E1
 
-    classDef presentation fill:#d1f0ff,stroke:#0066cc
-    classDef api fill:#ffe6cc,stroke:#ff9900
-    classDef business fill:#d9f2d9,stroke:#339933
-    classDef data fill:#e6ccff,stroke:#9933ff
-    classDef external fill:#ffe6e6,stroke:#cc0000
-
     class A1,A2,A3 presentation
     class B1,B2,B3,B4,B5,B6 api
     class C1,C2,C3,C4,C5,C6,C7 business
@@ -113,7 +107,7 @@ classDiagram
         -string _apiKey
         +RegisterFaceAsync(string, string)
         +IdentifyFaceAsync(string)
-        +VerifyFacesAsync(string, string)
+        +VerifyFaceAgainstPersonAsync(string, string)
     }
 
     class UploadService {

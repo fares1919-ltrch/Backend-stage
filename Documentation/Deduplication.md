@@ -59,11 +59,7 @@ graph TD
     Admin --> ViewExceptions
     Admin --> ResolveException
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef process fill:#d9f2d9,stroke:#339933
-    classDef duplicate fill:#e6ccff,stroke:#9933ff
-    classDef exception fill:#ffe6e6,stroke:#cc0000
+
 
     class User user
     class Admin admin
@@ -260,8 +256,7 @@ classDiagram
     class T4FaceService {
         +RegisterFaceAsync(string, string)
         +IdentifyFaceAsync(string)
-        +VerifyFacesAsync(string, string)
-        +DetectFacesAsync(string)
+        +VerifyFaceAgainstPersonAsync(string, string)
     }
 
     DeduplicationProcess "1" *-- "many" ProcessStep
@@ -566,7 +561,7 @@ Verifies if two faces match and returns a similarity score.
 
 ## Similarity Threshold
 
-The system uses a similarity threshold (default: 0.8) to determine if two faces are potential duplicates. Matches with a similarity score above this threshold create duplicate records for user review.
+The system uses a similarity threshold (default: 70%) to determine if two faces are potential duplicates. Matches with a similarity score above this threshold create duplicate records for user review.
 
 ## Frontend Services
 

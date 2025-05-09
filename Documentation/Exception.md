@@ -47,10 +47,6 @@ graph TD
     SuperAdmin --> UpdateProcess
     SuperAdmin --> NotifyUsers
 
-    classDef user fill:#d1f0ff,stroke:#0066cc
-    classDef admin fill:#ffe6cc,stroke:#ff9900
-    classDef exception fill:#d9f2d9,stroke:#339933
-    classDef integration fill:#e6ccff,stroke:#9933ff
 
     class Admin user
     class SuperAdmin admin

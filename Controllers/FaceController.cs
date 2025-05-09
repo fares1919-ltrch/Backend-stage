@@ -25,26 +25,46 @@ namespace Backend.Controllers
     }
 
     /// <summary>
-    /// Verifies if two face images match
+    /// Verifies a face against a person name - exact match to T4Face API
     /// </summary>
-    /// <param name="base64Image1">First face image in base64 format</param>
-    /// <param name="base64Image2">Second face image in base64 format</param>
-    /// <returns>Verification result with match status and confidence</returns>
     [HttpPost("verify")]
     [ProducesResponseType(200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(401)]
-    public async Task<IActionResult> VerifyFaces([FromBody] VerifyFacesRequest request)
+    public async Task<IActionResult> VerifyFace([FromBody] VerifyFaceRequest request)
     {
-      if (string.IsNullOrEmpty(request.Base64Image1) || string.IsNullOrEmpty(request.Base64Image2))
+      if (string.IsNullOrEmpty(request.person_face))
       {
-        return BadRequest(new { message = "Both images are required" });
+        return BadRequest(new { message = "person_face is required" });
+      }
+
+      if (string.IsNullOrEmpty(request.person_name))
+      {
+        return BadRequest(new { message = "person_name is required" });
       }
 
       try
       {
-        var result = await _faceService.VerifyFacesAsync(request.Base64Image1, request.Base64Image2);
-        return Ok(result);
+        var result = await _faceService.VerifyFaceAgainstPersonAsync(request.person_face, request.person_name);
+
+        // Parse the raw response to get the exact values from T4Face API
+        var rawResponse = System.Text.Json.JsonDocument.Parse(result.RawResponse);
+        var verificationResult = rawResponse.RootElement.GetProperty("verification_result");
+
+        // Return the exact format and values from T4Face API
+        var response = new
+        {
+          verification_result = new
+          {
+            verification_status = result.Success ? 200 : 400,
+            verification_error = result.Message ?? string.Empty,
+            cosine_dist = verificationResult.GetProperty("cosine_dist").GetString(),
+            similarity = verificationResult.GetProperty("similarity").GetString(),
+            compare_result = result.CompareResult
+          }
+        };
+
+        return Ok(response);
       }
       catch (Exception ex)
       {
@@ -52,53 +72,36 @@ namespace Backend.Controllers
       }
     }
 
-    /// <summary>
-    /// Detects faces in an image
-    /// </summary>
-    /// <param name="base64Image">Face image in base64 format</param>
-    /// <returns>Detection result with success status and face count</returns>
-    [HttpPost("detect")]
-    [ProducesResponseType(200)]
-    [ProducesResponseType(400)]
-    [ProducesResponseType(401)]
-    public async Task<IActionResult> DetectFaces([FromBody] DetectFacesRequest request)
-    {
-      if (string.IsNullOrEmpty(request.Base64Image))
-      {
-        return BadRequest(new { message = "Image is required" });
-      }
 
-      try
-      {
-        var result = await _faceService.DetectFacesAsync(request.Base64Image);
-        return Ok(result);
-      }
-      catch (Exception ex)
-      {
-        return BadRequest(new { message = ex.Message });
-      }
-    }
 
     /// <summary>
-    /// Identifies a face against the database
+    /// Identifies a face against the database - exact match to T4Face API
     /// </summary>
-    /// <param name="base64Image">Face image in base64 format</param>
-    /// <returns>Identification result with matches</returns>
     [HttpPost("identify")]
     [ProducesResponseType(200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(401)]
     public async Task<IActionResult> IdentifyFace([FromBody] IdentifyFaceRequest request)
     {
-      if (string.IsNullOrEmpty(request.Base64Image))
+      if (string.IsNullOrEmpty(request.search_image))
       {
-        return BadRequest(new { message = "Image is required" });
+        return BadRequest(new { message = "search_image is required" });
       }
 
       try
       {
-        var result = await _faceService.IdentifyFaceAsync(request.Base64Image);
-        return Ok(result);
+        var result = await _faceService.IdentifyFaceAsync(request.search_image);
+
+        // Parse the raw response to get the exact values from T4Face API
+        var rawResponse = System.Text.Json.JsonDocument.Parse(result.RawResponse);
+
+        // Return the exact format and values from T4Face API
+        var response = new
+        {
+          identification_candidates = rawResponse.RootElement.GetProperty("identification_candidates").Clone()
+        };
+
+        return Ok(response);
       }
       catch (Exception ex)
       {
@@ -128,12 +131,16 @@ namespace Backend.Controllers
         try
         {
           // Try verification
-          var verifyResult = await _faceService.VerifyFacesAsync(testImage, testImage);
+          // Generate a temporary person name for testing
+          string testPersonName = $"test_person_{DateTime.UtcNow.Ticks}";
 
-          // If verification succeeds, try detection
-          var detectResult = await _faceService.DetectFacesAsync(testImage);
+          // First register the test image with the temporary name
+          await _faceService.RegisterFaceAsync(testPersonName, testImage);
 
-          // If detection succeeds, try identification
+          // Then verify against the registered person
+          var verifyResult = await _faceService.VerifyFaceAgainstPersonAsync(testImage, testPersonName);
+
+          // Try identification
           var identifyResult = await _faceService.IdentifyFaceAsync(testImage);
 
           // All tests passed
@@ -144,7 +151,6 @@ namespace Backend.Controllers
             apiUrl = (_faceService as T4FaceService)?.ApiUrl ?? "Unknown",
             certificate = certificateInfo,
             verifyResult = verifyResult,
-            detectResult = detectResult,
             identifyResult = identifyResult
           });
         }
@@ -264,20 +270,18 @@ namespace Backend.Controllers
     }
   }
 
-  // Request DTOs
-  public class VerifyFacesRequest
+  // Request DTOs that exactly match T4Face API
+  public class VerifyFaceRequest
   {
-    public string Base64Image1 { get; set; }
-    public string Base64Image2 { get; set; }
-  }
-
-  public class DetectFacesRequest
-  {
-    public string Base64Image { get; set; }
+    public string person_name { get; set; }
+    public string person_face { get; set; }
   }
 
   public class IdentifyFaceRequest
   {
-    public string Base64Image { get; set; }
+    public string search_image { get; set; }
+    public int hit_threshold { get; set; } = 70;
   }
+
+
 }
